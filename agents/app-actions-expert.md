@@ -72,7 +72,7 @@ When generating workflows:
 
 ## Action Reference
 
-The action is `kenotron-ms/amplifier-app-actions@main`. One required secret: `ANTHROPIC_API_KEY`.
+The action is `microsoft/amplifier-app-actions@main`. One required secret: `ANTHROPIC_API_KEY`.
 
 ### Inputs
 
@@ -149,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           prompt: |
             Triage this GitHub issue: ${{ github.event.issue.html_url }}
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           attractor_source: .github/amplifier/triage-review.dot
           model: claude-sonnet-4-6
@@ -215,7 +215,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           enable_reproduction: true
           prompt: |
@@ -255,7 +255,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           prompt: |
             Review this pull request: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
@@ -287,7 +287,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           prompt: |
             This issue is a PR review request. Find the PR URL or reference (owner/repo#N) in
@@ -325,7 +325,7 @@ jobs:
       startsWith(github.event.comment.body, '/triage')
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           attractor_source: .github/amplifier/triage-review.dot
           model: claude-sonnet-4-6
@@ -342,7 +342,7 @@ jobs:
       !startsWith(github.event.comment.body, '/pr')
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@main
+      - uses: microsoft/amplifier-app-actions@main
         with:
           prompt: |
             Issue: ${{ github.event.issue.html_url }}

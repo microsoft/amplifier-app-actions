@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@v1
         with:
           prompt: |
             You are triaging a new GitHub issue.
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@v1
         with:
           prompt: |
             You are reviewing a new pull request.
@@ -79,7 +79,7 @@ jobs:
 Load the `app-actions` bundle in your local Amplifier session to get AI-assisted help configuring workflows, writing prompts, or designing attractor pipelines:
 
 ```bash
-amplifier run --bundle git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md
+amplifier run --bundle git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md
 ```
 
 Then ask naturally:
@@ -336,7 +336,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kenotron-ms/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           enable_reproduction: true

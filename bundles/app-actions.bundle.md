@@ -50,7 +50,7 @@ AI assistance configuring issue tracking, PR reviews, or attractor pipelines for
 ## When to Use This Bundle
 
 ```
-amplifier run --bundle git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md
+amplifier run --bundle git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md
 ```
 
 Then ask the agent:

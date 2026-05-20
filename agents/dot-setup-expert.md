@@ -444,7 +444,7 @@ digraph simple_pipeline {
 
 ```yaml
 # issue-triage.yml
-- uses: kenotron-ms/amplifier-app-actions@main
+- uses: microsoft/amplifier-app-actions@main
   with:
     attractor_source: .github/amplifier/triage-review.dot
     model: claude-sonnet-4-6
