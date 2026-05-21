@@ -282,7 +282,7 @@ jobs:
   review-from-issue:
     if: >-
       github.event_name == 'issue_comment' &&
-      contains(github.event.comment.body, '/pr') &&
+      contains(github.event.comment.body, '/review-pr') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     steps:
@@ -339,7 +339,7 @@ jobs:
       !endsWith(github.event.comment.user.login, '[bot]') &&
       !startsWith(github.event.comment.body, '/triage') &&
       !startsWith(github.event.comment.body, '/repro') &&
-      !startsWith(github.event.comment.body, '/pr')
+      !startsWith(github.event.comment.body, '/review-pr')
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/amplifier-app-actions@main
