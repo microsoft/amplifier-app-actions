@@ -49,6 +49,22 @@ def parse_event(event_path: str) -> dict[str, Any]:
             "head_ref": pr["head"]["ref"],
         }
 
+    if "comment" in data and "issue" in data:
+        issue = data["issue"]
+        comment = data["comment"]
+        return {
+            "event_type": "issue_comment",
+            "owner": owner,
+            "repo": repo,
+            "number": issue["number"],
+            "title": issue["title"],
+            "body": comment.get("body") or "",
+            "author": comment["user"]["login"],
+            "labels": [label["name"] for label in issue.get("labels", [])],
+            "base_ref": "",
+            "head_ref": "",
+        }
+
     if "issue" in data:
         issue = data["issue"]
         return {

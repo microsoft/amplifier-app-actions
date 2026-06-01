@@ -231,3 +231,103 @@ async def test_empty_or_none_body_renders_as_empty_not_none():
     body_line_index = result_none.index("Body:") + len("Body:\n")
     body_text_line = result_none[body_line_index:].split("\n")[0]
     assert body_text_line != "None"
+
+
+# ---------------------------------------------------------------------------
+# issue_comment tests
+# ---------------------------------------------------------------------------
+
+
+async def test_parse_issue_comment_extracts_comment_body_and_author(tmp_path):
+    """parse_event extracts comment content for issue_comment events."""
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 10,
+            "title": "Original issue",
+            "body": "Original issue body",
+            "user": {"login": "issue-author"},
+            "labels": [{"name": "bug"}],
+        },
+        "comment": {
+            "id": 42,
+            "body": "/triage-continue please analyze this",
+            "user": {"login": "commenter"},
+        },
+        "repository": {
+            "name": "test-repo",
+            "owner": {"login": "test-org"},
+        },
+    }
+    event_file = tmp_path / "issue_comment.json"
+    event_file.write_text(json.dumps(payload))
+
+    event = parse_event(str(event_file))
+
+    assert event["event_type"] == "issue_comment"
+    assert event["owner"] == "test-org"
+    assert event["repo"] == "test-repo"
+    assert event["number"] == 10
+    assert event["title"] == "Original issue"
+    assert event["body"] == "/triage-continue please analyze this"  # Comment body, not issue body
+    assert event["author"] == "commenter"  # Comment author, not issue author
+    assert event["labels"] == ["bug"]
+    assert event["base_ref"] == ""
+    assert event["head_ref"] == ""
+
+
+async def test_parse_pr_comment_preserves_pr_context(tmp_path):
+    """parse_event handles comments on PRs correctly."""
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 20,
+            "title": "PR title",
+            "body": "PR description",
+            "user": {"login": "pr-author"},
+            "labels": [],
+            "pull_request": {"url": "https://api.github.com/repos/test-org/test-repo/pulls/20"},
+        },
+        "comment": {
+            "id": 99,
+            "body": "Please review again",
+            "user": {"login": "reviewer"},
+        },
+        "repository": {
+            "name": "test-repo",
+            "owner": {"login": "test-org"},
+        },
+    }
+    event_file = tmp_path / "pr_comment.json"
+    event_file.write_text(json.dumps(payload))
+
+    event = parse_event(str(event_file))
+
+    assert event["event_type"] == "issue_comment"
+    assert event["number"] == 20
+    assert event["body"] == "Please review again"  # Comment body
+    assert event["author"] == "reviewer"  # Comment author
+
+
+async def test_format_issue_comment_renders_comment_body():
+    """format_context_block displays comment content for issue_comment events."""
+    event = {
+        "event_type": "issue_comment",
+        "owner": "test-org",
+        "repo": "test-repo",
+        "number": 10,
+        "title": "Original issue",
+        "body": "/triage-continue analyze auth module",
+        "author": "commenter",
+        "labels": ["bug"],
+        "base_ref": "",
+        "head_ref": "",
+    }
+
+    result = format_context_block(event)
+
+    assert result.startswith("[issue_comment: #10 in test-org/test-repo]")
+    assert "Title: Original issue" in result
+    assert "/triage-continue analyze auth module" in result  # Comment body visible
+    assert "Author: commenter" in result  # Comment author
+    assert "Base:" not in result  # No base/head for comments
