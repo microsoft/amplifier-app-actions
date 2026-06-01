@@ -34,6 +34,26 @@ def parse_event(event_path: str) -> dict[str, Any]:
     owner: str = repo_data["owner"]["login"]
     repo: str = repo_data["name"]
 
+    # Check for issue_comment BEFORE pull_request since PR comments have both keys
+    if "comment" in data and "issue" in data:
+        # issue_comment event — comment on an issue or PR
+        comment = data["comment"]
+        issue = data["issue"]
+        return {
+            "event_type": "issue_comment",
+            "owner": owner,
+            "repo": repo,
+            "number": issue["number"],
+            "title": issue["title"],
+            "body": comment.get("body") or "",
+            "author": comment["user"]["login"],
+            "labels": [label["name"] for label in issue.get("labels", [])],
+            "base_ref": "",
+            "head_ref": "",
+            "issue_title": issue["title"],  # Preserve parent issue context
+            "is_pr_comment": "pull_request" in data,  # Flag if comment is on PR
+        }
+
     if "pull_request" in data:
         pr = data["pull_request"]
         return {
@@ -96,5 +116,10 @@ def format_context_block(event: dict[str, Any]) -> str:
 
     if event["event_type"] == "pull_request":
         lines.append(f"Base: {event['base_ref']} \u2192 Head: {event['head_ref']}")
+
+    if event["event_type"] == "issue_comment":
+        lines.insert(1, f"[Comment on issue: {event.get('issue_title', event['title'])}]")
+        if event.get("is_pr_comment"):
+            lines.append("[This is a comment on a pull request]")
 
     return "\n".join(lines)
