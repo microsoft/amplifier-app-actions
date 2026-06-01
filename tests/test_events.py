@@ -103,11 +103,76 @@ async def test_parse_pr_extracts_fields_including_refs(tmp_path):
     assert event["head_ref"] == "feature/test"
 
 
+async def test_parse_issue_comment_event(tmp_path):
+    """parse_event extracts comment body/author for issue_comment events."""
+    payload = {
+        "action": "created",
+        "comment": {
+            "body": "/triage-continue please analyze this",
+            "user": {"login": "commenter-user"},
+        },
+        "issue": {
+            "number": 123,
+            "title": "Original issue title",
+            "body": "Original issue body that should NOT appear",
+            "user": {"login": "original-author"},
+            "labels": [{"name": "bug"}],
+        },
+        "repository": {
+            "name": "test-repo",
+            "owner": {"login": "test-org"},
+        },
+    }
+    event_file = tmp_path / "issue_comment.json"
+    event_file.write_text(json.dumps(payload))
+
+    event = parse_event(str(event_file))
+
+    assert event["event_type"] == "issue_comment"
+    assert event["body"] == "/triage-continue please analyze this"
+    assert event["author"] == "commenter-user"
+    assert event["number"] == 123
+    assert event["title"] == "Original issue title"
+    assert event["labels"] == ["bug"]
+
+
+async def test_parse_pr_comment_event(tmp_path):
+    """parse_event handles issue_comment events on pull requests."""
+    payload = {
+        "action": "created",
+        "comment": {
+            "body": "/pr-review",
+            "user": {"login": "reviewer"},
+        },
+        "issue": {
+            "number": 456,
+            "title": "PR: Add feature X",
+            "body": "PR description",
+            "user": {"login": "pr-author"},
+            "labels": [{"name": "enhancement"}],
+        },
+        "pull_request": {"url": "https://api.github.com/repos/test-org/test-repo/pulls/456"},
+        "repository": {
+            "name": "test-repo",
+            "owner": {"login": "test-org"},
+        },
+    }
+    event_file = tmp_path / "pr_comment.json"
+    event_file.write_text(json.dumps(payload))
+
+    event = parse_event(str(event_file))
+
+    assert event["event_type"] == "issue_comment"
+    assert event["body"] == "/pr-review"
+    assert event["author"] == "reviewer"
+    assert "pull_request" in event
+
+
 async def test_unknown_event_raises_value_error(tmp_path):
     """parse_event raises ValueError starting with 'Unknown event' for unknown payloads."""
     payload = {
         "action": "created",
-        "comment": {"id": 42, "body": "A comment"},
+        "unknown_key": "unknown_value",
         "repository": {
             "name": "test-repo",
             "owner": {"login": "test-org"},

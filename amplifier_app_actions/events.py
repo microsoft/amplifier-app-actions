@@ -34,6 +34,28 @@ def parse_event(event_path: str) -> dict[str, Any]:
     owner: str = repo_data["owner"]["login"]
     repo: str = repo_data["name"]
 
+    # Handle issue_comment events (comments on issues or PRs)
+    # Must be checked before the generic "issue" branch to prevent fallthrough
+    if "comment" in data and "issue" in data:
+        comment = data["comment"]
+        issue = data["issue"]
+        result = {
+            "event_type": "issue_comment",
+            "owner": owner,
+            "repo": repo,
+            "number": issue["number"],
+            "title": issue["title"],
+            "body": comment.get("body") or "",
+            "author": comment["user"]["login"],
+            "labels": [label["name"] for label in issue.get("labels", [])],
+            "base_ref": "",
+            "head_ref": "",
+        }
+        # For PR-attached comments, include pull_request context if present
+        if "pull_request" in data:
+            result["pull_request"] = data["pull_request"]
+        return result
+
     if "pull_request" in data:
         pr = data["pull_request"]
         return {
