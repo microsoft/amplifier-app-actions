@@ -26,15 +26,18 @@ Issue investigation context + GitHub tools for `amplifier-app-actions` workflows
 
 Deep analysis of issues and pull requests. The agent examines repository code,
 forms a root-cause hypothesis with `file:line` evidence, and posts its findings
-as a comment. Use this bundle by setting `bundle: investigate` in your GitHub
-Actions workflow step.
+as a comment. Reference this bundle via its full `git+https://` URI
+(setting `bundle:` to the bare name `investigate` does not work).
 
 ## Usage
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
 - uses: microsoft/amplifier-app-actions@v1
   with:
-    bundle: investigate
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/investigate.bundle.md
     prompt: |
       A contributor requested investigation of this issue.
       Read the issue from the GitHub event context, examine the repository

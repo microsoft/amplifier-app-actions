@@ -26,14 +26,18 @@ PR review context + GitHub tools for `amplifier-app-actions` workflows.
 
 Reviews pull request diffs and posts a structured review comment. Applies the
 five-check framework: Necessity, Layer fit, Pattern, Correctness, Calibration.
-Use this bundle by setting `bundle: pr-review` in your GitHub Actions workflow step.
+Reference this bundle via its full `git+https://` URI
+(setting `bundle:` to the bare name `pr-review` does not work).
 
 ## Usage
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
 - uses: microsoft/amplifier-app-actions@v1
   with:
-    bundle: pr-review
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/pr-review.bundle.md
     prompt: |
       A pull request was opened. Review it.
   env:
