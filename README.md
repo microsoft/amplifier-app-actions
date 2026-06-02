@@ -119,9 +119,9 @@ When no `bundle:` is specified the action uses `github-tools`. Two higher tiers 
 | `github-tools-dtu` | Everything in `github-tools` + Digital Twin Universe for containerised reproduction (`enable_reproduction: true`) |
 | `github-tools-amplifier-dev` | Everything in `github-tools-dtu` (placeholder for future Amplifier-ecosystem tooling) |
 
-### Built-in workflow bundles
+### Default workflow bundles
 
-Three workflow-specific bundles ship with `amplifier-app-actions`. Set `bundle:` to the appropriate alias to get the right context loaded automatically during the GHA run — no external repo required:
+These three bundles are the defaults we run ourselves for issue triage, PR review, and investigation. They've proven to be such a good starting point that they're how the setup expert agent gets a new repo configured — point a workflow at one and the agent comes pre-loaded with battle-tested guidance for that job. Each composes `github-tools` (inheriting all standard tools) and layers on the matching context file from `context/`:
 
 | Bundle | Trigger event | What it adds on top of `github-tools` |
 |--------|---------------|---------------------------------------|
@@ -129,7 +129,11 @@ Three workflow-specific bundles ship with `amplifier-app-actions`. Set `bundle:`
 | `pr-review` | `pull_request: [opened]` | Five-check review framework (Necessity · Layer fit · Pattern · Correctness · Calibration), PR review workflow process |
 | `investigate` | `issue_comment` slash-command (e.g. `/investigate`) | Investigation methodology, evidence standards, findings comment format |
 
-These bundles compose `github-tools` (inheriting all standard tools) and layer on top the matching context file from `context/`. They replace the retired `kenotron-ms/amplifier-bundle-dev-support` external repo — the same context now ships built-in.
+Reference them like any other bundle — a `git+https://` URI pointing at this repo:
+
+```yaml
+bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/issue-triage.bundle.md
+```
 
 ### Bringing your own bundle
 
@@ -141,7 +145,7 @@ bundle: git+https://github.com/my-org/my-bundle-repo@main#subdirectory=bundles/m
 
 The `#subdirectory=` fragment selects a specific file inside the repo. The named bundle becomes the active bundle for the entire run — it can compose the built-in `github-tools` bundle to inherit all standard tools while adding its own context and behaviors on top.
 
-> **Note:** `kenotron-ms/amplifier-bundle-dev-support` has been retired. The issue-triage, pr-review, and investigate workflows now ship as built-in bundles (see [Built-in workflow bundles](#built-in-workflow-bundles) above). Use `bundle: issue-triage`, `bundle: pr-review`, or `bundle: investigate` directly instead.
+> **Tip:** The default `issue-triage`, `pr-review`, and `investigate` bundles in this repo (see [Default workflow bundles](#default-workflow-bundles) above) are a strong starting point — point your workflow straight at them, or fork/compose them in your own bundle to tailor the guidance to your project.
 
 Provider API keys are passed as environment variables, not action inputs. Set the appropriate secret for your provider:
 

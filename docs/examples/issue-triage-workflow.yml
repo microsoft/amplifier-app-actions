@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: microsoft/amplifier-app-actions@v1
         with:
-          bundle: issue-triage
+          bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/issue-triage.bundle.md
           prompt: |
             A new issue was opened. Triage it.
           provider: anthropic
