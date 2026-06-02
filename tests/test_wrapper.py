@@ -702,3 +702,53 @@ async def test_run_routes_attractor_to_run_attractor(tmp_path):
     assert result == 0
     mock_attractor.assert_called_once()
     mock_prompt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _session_search_paths: repo-local file access via GITHUB_WORKSPACE
+# ---------------------------------------------------------------------------
+
+
+def test_session_search_paths_includes_github_workspace(tmp_path, monkeypatch):
+    """When GITHUB_WORKSPACE is a real dir it is added to the session search
+    paths so repo-local files (e.g. .github/amplifier/*) resolve without the
+    DOT hardcoding the repo name."""
+    from amplifier_app_actions.wrapper import _session_search_paths
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
+
+    action_root = tmp_path / "action"
+    action_root.mkdir()
+
+    paths = _session_search_paths(str(action_root))
+
+    assert Path(action_root) in paths, "action root must remain a search path"
+    assert workspace in paths, "GITHUB_WORKSPACE must be added as a search path"
+
+
+def test_session_search_paths_omits_unset_workspace(tmp_path, monkeypatch):
+    """An unset GITHUB_WORKSPACE leaves search paths as cwd only (no change)."""
+    from amplifier_app_actions.wrapper import _session_search_paths
+
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    action_root = tmp_path / "action"
+    action_root.mkdir()
+
+    paths = _session_search_paths(str(action_root))
+
+    assert paths == [Path(action_root)]
+
+
+def test_session_search_paths_ignores_nonexistent_workspace(tmp_path, monkeypatch):
+    """A GITHUB_WORKSPACE that does not exist on disk is ignored (additive-only)."""
+    from amplifier_app_actions.wrapper import _session_search_paths
+
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path / "missing"))
+    action_root = tmp_path / "action"
+    action_root.mkdir()
+
+    paths = _session_search_paths(str(action_root))
+
+    assert paths == [Path(action_root)]

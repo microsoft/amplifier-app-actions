@@ -161,6 +161,28 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
     session.coordinator.register_capability("session.spawn", spawn_capability)
 
 
+def _session_search_paths(cwd: str | None) -> list[Path]:
+    """Filesystem search roots for the session's @mention / file resolution.
+
+    Always includes the bundle-anchor *cwd* (the action root, used so built-in
+    bundle aliases and the action's own resources resolve).  When running inside
+    GitHub Actions, ALSO includes ``$GITHUB_WORKSPACE`` — the consumer repo that
+    ``actions/checkout`` placed on disk — so attractor/prompt instructions can
+    read repo-local files (e.g. ``.github/amplifier/triage-context.md``) via a
+    relative path, WITHOUT hardcoding the repository owner/name into the DOT.
+
+    Adding a search path is purely additive: when ``GITHUB_WORKSPACE`` is unset
+    or missing on disk (local runs, unit tests) behaviour is unchanged.
+    """
+    paths: list[Path] = [Path(cwd) if cwd else Path.cwd()]
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    if workspace:
+        wp = Path(workspace)
+        if wp.is_dir() and wp not in paths:
+            paths.append(wp)
+    return paths
+
+
 async def _create_session(
     bundle_path: str,
     cwd: str | None = None,
@@ -189,7 +211,7 @@ async def _create_session(
 
     session_config = SessionConfig(
         config={},
-        search_paths=[Path(cwd) if cwd else Path.cwd()],
+        search_paths=_session_search_paths(cwd),
         verbose=False,
         prepared_bundle=prepared,
         bundle_name=bundle_path,
@@ -355,6 +377,7 @@ async def _run_attractor(
     # (os.path.join(tempfile.gettempdir(), "attractor-pipeline")) which is
     # reused across runs and causes the engine to replay old results in 0.0s.
     import tempfile as _tempfile
+
     run_logs_root = _tempfile.mkdtemp(prefix="attractor-run-")
 
     with contextlib.chdir(cwd) if cwd else contextlib.nullcontext():
@@ -378,7 +401,7 @@ async def _run_attractor(
     # --- Session creation with full CLI wiring -----------------------
     session_config = SessionConfig(
         config={},
-        search_paths=[Path(cwd) if cwd else Path.cwd()],
+        search_paths=_session_search_paths(cwd),
         verbose=False,
         prepared_bundle=prepared,
         bundle_name=bundle_path,
