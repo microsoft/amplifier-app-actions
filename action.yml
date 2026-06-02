@@ -8,15 +8,15 @@ inputs:
     required: false
     default: ''
   prompt_source:
-    description: 'Path to a prompt file in the checked-out repo (requires actions/checkout)'
+    description: 'Path to a prompt file in the checked-out repo (requires actions/checkout), OR a git+https://github.com/<org>/<repo>@<ref>#subdirectory=<file> URI to fetch it from another repo (private repos via github_token).'
     required: false
     default: ''
   recipe_source:
-    description: 'Path to an Amplifier recipe YAML file in the checked-out repo (requires actions/checkout)'
+    description: 'Path to a recipe YAML in the checked-out repo (requires actions/checkout), OR a git+https://github.com/<org>/<repo>@<ref>#subdirectory=<file> URI to fetch it from another repo (private repos via github_token).'
     required: false
     default: ''
   attractor_source:
-    description: 'Path to an attractor .dot pipeline file in the checked-out repo (requires actions/checkout)'
+    description: 'Path to an attractor .dot in the checked-out repo (requires actions/checkout), OR a git+https://github.com/<org>/<repo>@<ref>#subdirectory=<file> URI to fetch it from another repo (private repos via github_token).'
     required: false
     default: ''
   provider:

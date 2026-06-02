@@ -294,6 +294,7 @@ async def run(
         prompt_source=prompt_source,
         recipe_source=recipe_source,
         attractor_source=attractor_source,
+        github_token=github_token,
     )
 
     # Parse event and build context prefix (only when file actually exists)
