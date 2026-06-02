@@ -31,7 +31,7 @@ jobs:
 
       - uses: microsoft/amplifier-app-actions@v1
         with:
-          bundle: git+https://github.com/kenotron-ms/amplifier-bundle-dev-support@main#subdirectory=bundles/pr-review.bundle.md
+          bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/pr-review.bundle.md
           prompt: |
             A pull request was opened. Review it.
           provider: anthropic
