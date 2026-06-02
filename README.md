@@ -138,7 +138,7 @@ Write your own instructions as an inline string or a file in your repo.
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**`prompt_source:` (file path)** — best for longer prompts you want to version-control separately. The path is resolved from `$GITHUB_WORKSPACE` (the root of the checked-out repo), so `actions/checkout` must run first.
+**`prompt_source:` (file path or `git+https://` URI)** — best for longer prompts you want to version-control separately. For a local path, it is resolved from `$GITHUB_WORKSPACE`; pass a `git+https://` URI to fetch from another repo without a checkout step.
 
 ```yaml
 - uses: actions/checkout@v4
@@ -160,7 +160,7 @@ How an attractor run works:
 - Each node runs as a separate child session; analysis nodes can read code and call tools.
 - One node must be designated as the commenter by setting `llm_provider="anthropic-commenter"` on it; only that node can post comments and labels.
 
-`actions/checkout` is required (the `.dot` file lives in your repo).
+`actions/checkout` is required for a local path (the `.dot` file lives in your repo); use a `git+https://` URI to skip the checkout step.
 
 ```yaml
 - uses: actions/checkout@v4
@@ -181,18 +181,42 @@ This is the recommended way to customize a shared attractor pipeline per-repo �
 
 ## Local vs remote sourcing
 
-Only `bundle:` supports remote URLs. The three `*_source` inputs are **local filesystem paths only** — there is no URL support for them.
+`bundle:` has supported `git+https://` URIs since launch; `prompt_source`, `attractor_source`, and `recipe_source` now support them too.
 
 | Input | Local path | Remote (`git+https://`) | Needs `actions/checkout`? |
 |-------|:----------:|:-----------------------:|:-------------------------:|
 | `bundle` | ✓ | ✓ | No |
-| `prompt_source` | ✓ | ✗ | **Yes** |
-| `recipe_source` | ✓ | ✗ | **Yes** |
-| `attractor_source` | ✓ | ✗ | **Yes** |
+| `prompt_source` | ✓ | ✓ | Only for local paths |
+| `recipe_source` | ✓ | ✓ | Only for local paths |
+| `attractor_source` | ✓ | ✓ | Only for local paths |
 
-Paths for `prompt_source`, `recipe_source`, and `attractor_source` are resolved relative to `$GITHUB_WORKSPACE` (the root of the checked-out repo). If the file is missing from disk (e.g. `actions/checkout` was skipped), the action fails with a `FileNotFoundError` telling you to add `actions/checkout`.
+Local paths for `prompt_source`, `recipe_source`, and `attractor_source` are resolved relative to `$GITHUB_WORKSPACE` (the root of the checked-out repo). If the file is missing from disk (e.g. `actions/checkout` was skipped), the action fails with a `FileNotFoundError` telling you to add `actions/checkout`.
 
-`bundle:` remote URIs (`git+https://`) are fetched directly by Amplifier — no checkout step needed.
+Remote `git+https://` URIs are fetched directly via the GitHub Contents API — no checkout step needed.
+
+### Remote sourcing via `git+https://`
+
+All three `*_source` inputs accept the same URI grammar as `bundle:`:
+
+```
+git+https://github.com/<org>/<repo>@<ref>#subdirectory=<path/to/file>
+```
+
+- `@<ref>` is optional and defaults to `main`.
+- `#subdirectory=<file>` carries the path to the single file to fetch.
+- Fetched via the GitHub Contents API; the `GITHUB_API_URL` environment variable is honoured as the base (same override used for Gitea/DTU).
+
+**Private repositories:** `github_token` must have read access to the source repo. The default `${{ github.token }}` is scoped to the workflow's own repository — to fetch from a *different* private repo, supply a PAT (or any token with cross-repo read access) via the `github_token` input.
+
+```yaml
+- uses: microsoft/amplifier-app-actions@v1
+  with:
+    prompt_source: git+https://github.com/my-org/shared-prompts@main#subdirectory=prompts/triage.md
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+The same form works for `attractor_source` (a `.dot` file) and `recipe_source` (a YAML).
 
 ## Configuration reference
 
@@ -201,9 +225,9 @@ Paths for `prompt_source`, `recipe_source`, and `attractor_source` are resolved 
 | Input | Description | Default |
 |-------|-------------|---------|
 | `prompt` | Inline prompt text | — |
-| `prompt_source` | Path to a prompt file in the checked-out repo (requires `actions/checkout`) | — |
-| `recipe_source` | Path to an Amplifier recipe YAML in the checked-out repo (requires `actions/checkout`) | — |
-| `attractor_source` | Path to an attractor `.dot` pipeline in the checked-out repo (requires `actions/checkout`) | — |
+| `prompt_source` | Path to a prompt file in the checked-out repo (local path or `git+https://` URI; `actions/checkout` required for local paths) | — |
+| `recipe_source` | Path to an Amplifier recipe YAML in the checked-out repo (local path or `git+https://` URI; `actions/checkout` required for local paths) | — |
+| `attractor_source` | Path to an attractor `.dot` pipeline in the checked-out repo (local path or `git+https://` URI; `actions/checkout` required for local paths) | — |
 | `bundle` | Bundle alias, local path, or `git+https://` URI. See [Bundles](#bundles). | `github-tools` |
 | `provider` | *Accepted but currently a no-op — the bundle controls provider/model.* Valid values: `anthropic`, `openai`, `github-copilot`. | `anthropic` |
 | `model` | *Accepted but currently a no-op — the bundle controls provider/model.* | — |
@@ -270,7 +294,7 @@ The `provider` and `model` inputs are accepted but are **no-ops**; the active bu
 
 ### Recipes (`recipe_source:`)
 
-Point `recipe_source:` at an Amplifier recipe YAML to run a multi-step pipeline. The file must be on disk in the checked-out repo (requires `actions/checkout`). Staged (approval-gated) recipes are not supported in CI and will fail with a clear error.
+Point `recipe_source:` at an Amplifier recipe YAML to run a multi-step pipeline. The file can be a local path in the checked-out repo (requires `actions/checkout`) or a `git+https://` URI. Staged (approval-gated) recipes are not supported in CI and will fail with a clear error.
 
 Recipe step prompts support Jinja2 templating. GitHub event fields are injected automatically:
 
