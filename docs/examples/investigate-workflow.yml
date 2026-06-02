@@ -30,7 +30,7 @@ jobs:
 
       - uses: microsoft/amplifier-app-actions@v1
         with:
-          bundle: git+https://github.com/kenotron-ms/amplifier-bundle-dev-support@main#subdirectory=bundles/investigate.bundle.md
+          bundle: investigate
           prompt: |
             A contributor requested investigation of this issue.
             Read the issue from the GitHub event context, examine the repository
