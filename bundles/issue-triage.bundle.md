@@ -24,15 +24,15 @@ context:
 Issue triage context + GitHub tools for `amplifier-app-actions` workflows.
 
 Classifies new issues, applies the appropriate label, and posts a friendly
-acknowledgment comment. Use this bundle by setting `bundle: issue-triage` in
-your GitHub Actions workflow step.
+acknowledgment comment. Reference this bundle via its full `git+https://` URI
+(setting `bundle:` to the bare name `issue-triage` does not work).
 
 ## Usage
 
 ```yaml
 - uses: microsoft/amplifier-app-actions@v1
   with:
-    bundle: issue-triage
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/issue-triage.bundle.md
     prompt: |
       A new issue was opened. Triage it.
   env:

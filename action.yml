@@ -8,23 +8,23 @@ inputs:
     required: false
     default: ''
   prompt_source:
-    description: 'Path or URL to a prompt file (overrides prompt if set)'
+    description: 'Path to a prompt file in the checked-out repo (requires actions/checkout)'
     required: false
     default: ''
   recipe_source:
-    description: 'Path or URL to an Amplifier recipe YAML file'
+    description: 'Path to an Amplifier recipe YAML file in the checked-out repo (requires actions/checkout)'
     required: false
     default: ''
   attractor_source:
-    description: 'Path or URL to an attractor/context file'
+    description: 'Path to an attractor .dot pipeline file in the checked-out repo (requires actions/checkout)'
     required: false
     default: ''
   provider:
-    description: 'AI provider to use (anthropic, openai, or github-copilot)'
+    description: 'AI provider (currently a no-op; the bundle sets provider/model). Valid values: anthropic, openai, github-copilot.'
     required: false
     default: 'anthropic'
   model:
-    description: 'Model name override (leave empty to use provider default)'
+    description: 'Model name override (currently a no-op; the bundle sets provider/model)'
     required: false
     default: ''
   bundle:
