@@ -30,9 +30,9 @@ acknowledgment comment. Reference this bundle via its full `git+https://` URI
 ## Usage
 
 ```yaml
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
-    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/issue-triage.bundle.md
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/issue-triage.bundle.md
     prompt: |
       A new issue was opened. Triage it.
   env:

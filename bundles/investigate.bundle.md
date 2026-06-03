@@ -35,9 +35,9 @@ as a comment. Reference this bundle via its full `git+https://` URI
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
-    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/investigate.bundle.md
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/investigate.bundle.md
     prompt: |
       A contributor requested investigation of this issue.
       Read the issue from the GitHub event context, examine the repository
