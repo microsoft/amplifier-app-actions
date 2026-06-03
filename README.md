@@ -26,9 +26,9 @@ jobs:
   triage:
     runs-on: ubuntu-latest
     steps:
-      - uses: microsoft/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@main
         with:
-          bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/issue-triage.bundle.md
+          bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/issue-triage.bundle.md
           prompt: A new issue was opened. Triage it.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -57,9 +57,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: microsoft/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@main
         with:
-          bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/pr-review.bundle.md
+          bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/pr-review.bundle.md
           prompt: A pull request was opened. Review it.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -82,9 +82,9 @@ The specialized bundles — `issue-triage`, `pr-review`, and `investigate` — c
 **Issue triage** (no checkout needed):
 
 ```yaml
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
-    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/issue-triage.bundle.md
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/issue-triage.bundle.md
     prompt: A new issue was opened. Triage it.
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -96,9 +96,9 @@ The specialized bundles — `issue-triage`, `pr-review`, and `investigate` — c
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
-    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/pr-review.bundle.md
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/pr-review.bundle.md
     prompt: A pull request was opened. Review it.
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -110,9 +110,9 @@ The specialized bundles — `issue-triage`, `pr-review`, and `investigate` — c
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
-    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/investigate.bundle.md
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/investigate.bundle.md
     prompt: |
       A contributor requested investigation of this issue.
       Read the issue from the GitHub event context, examine the repository
@@ -128,7 +128,7 @@ Write your own instructions as an inline string or a file in your repo.
 **`prompt:` (inline)** — best for short, self-contained instructions. No checkout needed when using an inline prompt with no local file dependencies.
 
 ```yaml
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
     prompt: |
       Review the issue title and body.
@@ -142,7 +142,7 @@ Write your own instructions as an inline string or a file in your repo.
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
     prompt_source: .github/amplifier/triage-prompt.md
   env:
@@ -164,7 +164,7 @@ How an attractor run works:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
     attractor_source: .github/amplifier/triage-pipeline.dot
   env:
@@ -209,7 +209,7 @@ git+https://github.com/<org>/<repo>@<ref>#subdirectory=<path/to/file>
 **Private repositories:** `github_token` must have read access to the source repo. The default `${{ github.token }}` is scoped to the workflow's own repository — to fetch from a *different* private repo, supply a PAT (or any token with cross-repo read access) via the `github_token` input.
 
 ```yaml
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
     prompt_source: git+https://github.com/my-org/shared-prompts@main#subdirectory=prompts/triage.md
   env:
@@ -259,13 +259,13 @@ These bundles layer job-specific context on top of `github-tools`. They live in 
 
 ```yaml
 # Issue triage
-bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/issue-triage.bundle.md
+bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/issue-triage.bundle.md
 
 # PR review
-bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/pr-review.bundle.md
+bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/pr-review.bundle.md
 
 # Investigation
-bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/investigate.bundle.md
+bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/investigate.bundle.md
 ```
 
 ### Bringing your own bundle
@@ -345,7 +345,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: microsoft/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@main
         with:
           enable_reproduction: true
           prompt: |
@@ -437,7 +437,7 @@ Two expert agents are available: `app-actions-expert` (workflow setup) and `dot-
 
 ## Versioning
 
-Pin `@v1` for stability — the `v1` tag tracks the latest stable release. Use `@main` to follow the development tip (may contain breaking changes).
+Reference the action with `@main`. To freeze a specific version, pin to a commit SHA (e.g. `microsoft/amplifier-app-actions@<sha>`).
 
 ## Security
 

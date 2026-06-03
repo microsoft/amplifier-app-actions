@@ -35,9 +35,9 @@ Reference this bundle via its full `git+https://` URI
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: microsoft/amplifier-app-actions@v1
+- uses: microsoft/amplifier-app-actions@main
   with:
-    bundle: git+https://github.com/microsoft/amplifier-app-actions@v1#subdirectory=bundles/pr-review.bundle.md
+    bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/pr-review.bundle.md
     prompt: |
       A pull request was opened. Review it.
   env:

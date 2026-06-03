@@ -28,7 +28,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: microsoft/amplifier-app-actions@v1
+      - uses: microsoft/amplifier-app-actions@main
         with:
           bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/investigate.bundle.md
           prompt: |
