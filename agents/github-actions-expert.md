@@ -279,6 +279,66 @@ Always reference them via their full `git+https://` URI.
 
 ---
 
+## Validation: Is the GHA Setup Correct?
+
+Use this to confirm a repo's automation is correctly wired. Two tiers: **static checks**
+(read the repo, no run needed) and a **live smoke test** (the only real proof). Walk the
+user through both and report each item PASS/FAIL.
+
+### Tier 1 — Static checks (no run needed)
+
+- [ ] **Provider key set** — repo Settings → Secrets has `ANTHROPIC_API_KEY` (or the key the
+  bundle expects). Verify: `gh secret list -R <owner>/<repo>`.
+- [ ] **Workflow files exist** under `.github/workflows/` for the intended triggers
+  (issue-triage, pr-review, investigate, triage-continue).
+- [ ] **Action ref resolves** — `uses: microsoft/amplifier-app-actions@main` (or a pinned
+  SHA), not a deleted fork/branch.
+- [ ] **Bundle ref resolves** — each `bundle:` git+https points at a live repo/subpath
+  (e.g. `microsoft/amplifier-app-actions@main#subdirectory=bundles/<name>.bundle.md`).
+- [ ] **Exactly one instruction source** per step — exactly one of `prompt:` /
+  `prompt_source:` / `attractor_source:` / `recipe_source:`. More than one is an error.
+- [ ] **Checkout where needed** — `actions/checkout@v4` is a prior step whenever a LOCAL
+  `prompt_source`/`attractor_source`/`recipe_source` path is used; PR review uses
+  `fetch-depth: 0`. (Remote `git+https://` sources do NOT need checkout.)
+- [ ] **Permissions** grant what the workflow writes: `issues: write` (triage/investigate),
+  `pull-requests: write` (PR review), `contents: read`.
+- [ ] **Triggers correct** — `on: issues: types: [opened]` for triage; `pull_request`
+  and/or `issue_comment` for review; slash-command jobs gate on the comment body
+  containing the command AND `author_association` in `OWNER`/`MEMBER`/`COLLABORATOR`.
+- [ ] **Attractor assets present** — if `attractor_source:` is used, the `.dot` exists at
+  that path and any `@`-mentioned context files (e.g. `.github/amplifier/triage-context.md`)
+  are committed.
+
+### Tier 2 — Live smoke test (the only real proof)
+
+1. Trigger the cheapest path: open a throwaway issue (triage) or a tiny PR (review).
+2. Watch it: `gh run list -R <owner>/<repo> --limit 5`, then `gh run watch <id> --exit-status`.
+3. **PASS = all three:**
+   - the workflow actually **triggered** (a run appears for the event);
+   - run **conclusion = success** (`gh run view <id> --json conclusion`);
+   - the expected **GitHub side effect happened** — a triage comment on the issue / a
+     review on the PR. Check the issue/PR itself (`gh issue view <n> --json comments`), not
+     just the Actions log.
+4. Skim the action step log: no bundle-resolution error, no API-key error, and (for
+   attractor) `nodes_completed > 0`.
+
+### Failure-signal reading (log → cause)
+
+| Symptom | Likely cause |
+|---|---|
+| No run appears | trigger mismatch, workflow not on default branch, or Actions disabled |
+| Fails at "Run …app-actions" with a clone/bundle error | bad/deleted `bundle:` or action ref, or a private source the `github_token` can't read |
+| Run = success but **no comment/review** | missing `issues:`/`pull-requests: write` permission, or the prompt never called the post tool |
+| `401` / Anthropic auth error | `ANTHROPIC_API_KEY` missing or invalid |
+| `nodes_completed: 0` (attractor) | `.dot` not found at `attractor_source`, or checkout missing |
+| Bot re-triggers itself | comment trigger lacks a bot-author guard |
+
+**Bottom line:** static checks green AND one live run that ends in `success` *with* the
+expected comment/review visible on the issue/PR. Until you've seen the side effect on
+GitHub itself, it is not validated.
+
+---
+
 ## Debugging Guide
 
 ### Workflow never fires
