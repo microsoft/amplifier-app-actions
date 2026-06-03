@@ -8,7 +8,8 @@ bundle:
     when you want AI-assisted help configuring issue tracking, PR reviews,
     or attractor DOT pipelines for any GitHub repo.
 
-    Provides three expert agents and the /github-actions slash command:
+    Activate with /github-actions to enter the mode. Three specialist experts
+    are mode-gated — zero context cost until you type that command:
       - github-actions-expert: unified front-door consultant for the FULL lifecycle
         (zero setup → fully automated → custom prompts and pipelines)
       - app-actions-expert: workflow YAML templates, bundle selection, sane default prompts
@@ -18,6 +19,8 @@ includes:
   # Full foundation — registers foundation: namespace and provides
   # explorer, zen-architect, bug-hunter, and other foundation agents
   # as well as the delegate tool for agent orchestration.
+  # Foundation transitively brings in the modes runtime (via superpowers),
+  # so amplifier-bundle-modes does NOT need to be listed separately.
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   # Attractor bundle — registers attractor: namespace so dot-setup-expert
   # can @-mention attractor:docs/ for DOT syntax and authoring guides.
@@ -28,39 +31,6 @@ providers:
     source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
     config:
       default_model: claude-sonnet-4-6
-
-tools:
-  # Register this bundle's own skills/ dir so the /github-actions command is discovered.
-  # Mirrors foundation's tool-skills config and adds @app-actions:skills, so the result is
-  # correct whether bundle composition merges or replaces the skills source list.
-  - module: tool-skills
-    source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
-    config:
-      skills:
-        - "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills"
-        - "@app-actions:skills"
-      visibility:
-        enabled: true
-        inject_role: "user"
-        max_skills_visible: 50
-        ephemeral: true
-        priority: 20
-
-agents:
-  include:
-    # Note: agent loading searches /agents/ dir automatically — "agents/" not needed in path
-    - app-actions:github-actions-expert
-    - app-actions:app-actions-expert
-    - app-actions:dot-setup-expert
-
-context:
-  include:
-    # Thin awareness pointers — just enough to know the experts exist and to force delegation.
-    # Heavy documentation lives in the agent files (context sink pattern).
-    # github-actions-awareness is listed first: it is the front door and covers the other two.
-    - app-actions:context/github-actions-awareness.md
-    - app-actions:context/app-actions-awareness.md
-    - app-actions:context/dot-setup-awareness.md
 ---
 
 # app-actions Bundle
@@ -75,18 +45,25 @@ AI assistance configuring issue tracking, PR reviews, or attractor pipelines for
 amplifier bundle add git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md --app
 ```
 
-Then invoke the expert directly with:
+Then activate the GitHub Actions expert mode with:
 ```
 /github-actions
 ```
-Or ask naturally:
+
+The three expert agents are **mode-gated** — they consume zero context tokens until you type
+`/github-actions`. Once active:
 - "Help me set up issue triage and PR reviews for my repo"
 - "Create a .dot file for an investigation pipeline"
 - "Show me the four-workflow pattern for GitHub automation"
 - "Help me customize the quality gate for my codebase"
 - "My issue triage workflow runs but posts no comment — what's wrong?"
 
-## Expert Agents
+Use `/mode off` when done to return to normal (zero-cost) baseline.
+
+## Expert Agents (mode-gated)
+
+All three experts are contributed by the `/github-actions` mode. They are **not** loaded into
+session context until the mode is active.
 
 ### `github-actions-expert` ← **START HERE**
 
@@ -123,38 +100,32 @@ Specialist for attractor DOT pipeline design and debugging. Provides:
 - Common mistake fixes (`nodes_completed: 0`, `DirectProviderBackend`, pipeline never exits)
 - Customization guidance for non-Amplifier repos
 
-## Slash Command
+## Architecture: Mode-Gated Context Sink
 
-The `/github-actions` command spawns the `github-actions-expert` in an isolated sub-session.
-Use it from any session where this bundle is loaded:
-
-```
-/github-actions help me set up automated PR reviews
-/github-actions my workflow isn't posting comments — what's wrong?
-/github-actions design a manager-supervisor pipeline for my repo
-```
-
-## Architecture: Context Sink Pattern
-
-The bundle's context files are thin pointers (~35 lines each). All heavy documentation lives
-in the agent `.md` files, which are only loaded when an agent is actually spawned — keeping
-your local session lean while the experts carry their full knowledge in isolated sub-sessions.
+The bundle contributes **zero tokens** to the baseline session. The three expert agents are
+mode-gated — contributed by the `/github-actions` mode and loaded only when active. All heavy
+documentation lives in the agent `.md` files, which load only when an agent is spawned.
 
 ```
 app-actions bundle (this file)
-├── context/github-actions-awareness.md   ← thin pointer (~35 lines)  ← front door
-├── context/app-actions-awareness.md      ← thin pointer (~40 lines)
-├── context/dot-setup-awareness.md        ← thin pointer (~44 lines)
-├── agents/github-actions-expert.md       ← heavy agent (loaded on spawn only) ← coordinator
-├── agents/app-actions-expert.md          ← heavy agent (loaded on spawn only)
-├── agents/dot-setup-expert.md            ← heavy agent (loaded on spawn only)
-└── skills/github-actions/SKILL.md        ← /github-actions slash command
+├── modes/github-actions.md         ← mode definition (advertised: false)
+│   └── contributes on activation:
+│       ├── agents/github-actions-expert.md   ← heavy agent (context sink)
+│       ├── agents/app-actions-expert.md      ← heavy agent (context sink)
+│       └── agents/dot-setup-expert.md        ← heavy agent (context sink)
+│
+└── baseline session                ← ZERO GHA tokens until /github-actions
 ```
+
+Token cost model:
+- **Baseline (mode off)**: 0 tokens from this bundle
+- **Mode active**: mode body (~40 lines) injected per turn; agents loaded on spawn only
+- **Agent spawned**: full agent knowledge in isolated sub-session
 
 ## Relationship to the Example Repo
 
 This bundle produces the setup that `amplifier-actions-example` demonstrates.
 The example repo (`kenotron-ms/amplifier-actions-example`) shows the finished
-`.github/workflows/` and `.github/amplifier/triage-review.dot` — use `github-actions-expert`
-as your front door and it will coordinate `app-actions-expert` and `dot-setup-expert`
-to get there for your own repo.
+`.github/workflows/` and `.github/amplifier/triage-review.dot` — activate
+`/github-actions` and `github-actions-expert` will coordinate `app-actions-expert`
+and `dot-setup-expert` to get there for your own repo.
