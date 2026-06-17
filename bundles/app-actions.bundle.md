@@ -2,6 +2,7 @@
 bundle:
   name: app-actions
   version: 0.1.0
+  namespace_root: ".."
   description: >
     Expert agents for setting up and customizing GitHub repo automation with
     amplifier-app-actions. Load this bundle in your local development session
