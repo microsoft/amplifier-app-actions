@@ -1,0 +1,49 @@
+# Reference workflow for exhaustive attractor-pipeline PR review.
+#
+# Uses pr-review-exhaustive.dot: 5 thread-isolated reviewer lanes (correctness,
+# architecture, patterns, tests, pedantic) each with fresh LLM context, followed
+# by a merge node, an adversarial quality gate, and a single comprehensive comment.
+#
+# Copy this file to .github/workflows/pr-review-exhaustive.yml in your repository.
+#
+# WARNING: NEVER use pull_request_target for this workflow.
+# pull_request_target runs with write permissions in the context of the *base*
+# branch and can expose secrets to untrusted code from a fork. Use pull_request
+# only. See:
+# https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+#
+# Prerequisites:
+#   1. Set the ANTHROPIC_API_KEY repository secret.
+
+name: PR Review (Exhaustive)
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/amplifier-app-actions@main
+        with:
+          # The attractor pipeline bundle is selected automatically when
+          # attractor_source is set. The bundle: input is not needed.
+          #
+          # OPTION A — use the shared pipeline directly from this repo (no copy needed):
+          attractor_source: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=pipelines/pr-review-exhaustive.dot
+          #
+          # OPTION B — copy the .dot to your repo for full ownership and local edits:
+          # attractor_source: .github/amplifier/pr-review-exhaustive.dot
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # GH_TOKEN is used by curl commands inside the pipeline nodes.
+          GH_TOKEN: ${{ github.token }}
