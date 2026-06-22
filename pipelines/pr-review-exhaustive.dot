@@ -1,0 +1,307 @@
+// pr-review-exhaustive.dot
+//
+// Pipeline: Exhaustive Parallel-Lane PR Code Review
+//
+// PROBLEM SOLVED: single-session review satisfices — finds a few things, posts,
+// stops. On round 2 it finds more. This pipeline runs 5 thread-isolated reviewer
+// lanes (each gets a fresh LLM context so it cannot anchor on what prior lanes
+// said), then merges findings into ONE comprehensive comment.
+//
+// ARCHITECTURE: Flat supervisor-free pipeline (same pattern as triage-review.dot).
+// Sequential execution — DOT pipelines have no native parallel dispatch.
+// Thread isolation is the key lever: each lane gets its own thread so its
+// reasoning is fully independent. Data travels via pipeline state ($variable),
+// not via thread history, so isolation holds even though lanes run sequentially.
+//
+// THREAD MAP:
+//   review-thread      — checkout_and_read + comment_draft (pipeline anchor)
+//   correctness-thread — lane_correctness  (fresh: logic bugs, edge cases, exceptions)
+//   arch-thread        — lane_architecture (fresh: layer fit, coupling, wrong abstractions)
+//   patterns-thread    — lane_patterns     (fresh: API misuse, naming, conventions)
+//   tests-thread       — lane_tests        (fresh: coverage gaps, test quality)
+//   pedantic-thread    — lane_pedantic     (fresh: spelling, inline docs, nitpicks)
+//   merge-thread       — merge_findings    (collect + deduplicate + prioritize)
+//   quality-thread     — quality_eval      (adversarial completeness check)
+//
+// PIPELINE STATE (context_updates → $variable interpolation):
+//   checkout_and_read → pr_owner, pr_repo, pr_number, pr_url, pr_title,
+//                       pr_description, pr_head_branch, pr_head_sha, diff_content,
+//                       changed_files_list
+//   lane_correctness  → correctness_findings, correctness_comments
+//   lane_architecture → arch_findings, arch_comments
+//   lane_patterns     → patterns_findings, patterns_comments
+//   lane_tests        → tests_findings, tests_comments
+//   lane_pedantic     → pedantic_findings, pedantic_comments
+//   merge_findings    → merged_review, review_verdict, review_summary,
+//                       review_comments_json
+//   quality_eval      → quality_feedback  (written on FAIL, read by merge on retry)
+//
+// LLM PROFILES (attractor-pipeline.bundle.md):
+//   All nodes except comment_draft → pipeline-agent-anthropic (no github_post_comment)
+//   comment_draft                  → pipeline-agent-commenter (has github_post_comment)
+//
+// RETRY LOOP:
+//   quality_eval (goal_gate) evaluates synthesis quality only — not lane analysis.
+//   On FAIL: retries merge_findings (lanes preserved, only synthesis re-runs).
+//   On SUCCESS: continues to comment_draft → done.
+//
+// GHA USAGE (remote — no checkout needed):
+//   attractor_source: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=pipelines/pr-review-exhaustive.dot
+//
+// GHA USAGE (local copy — copy this file to .github/amplifier/pr-review-exhaustive.dot):
+//   attractor_source: .github/amplifier/pr-review-exhaustive.dot
+//
+// Both forms require GH_TOKEN in env (used by curl commands inside pipeline nodes):
+//   env:
+//     GH_TOKEN: ${{ github.token }}
+//     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+digraph pr_review_exhaustive {
+
+    // ── Graph-level attributes ──────────────────────────────────────────────
+
+    label             = "Exhaustive PR Review"
+    description       = "5 thread-isolated reviewer lanes → merge → quality gate → one comprehensive comment"
+    labelloc          = t
+    rankdir           = TB
+    compound          = true
+    fontname          = "Helvetica"
+    nodesep           = 0.6
+    ranksep           = 0.9
+
+    // Attractor pipeline configuration.
+    // goal = "$goal" is populated by the GHA attractor_source+goal: pair, or by
+    // /resolve new_instance(...) command context.
+    goal              = "$goal"
+    default_fidelity  = "full"
+    default_thread_id = "review-thread"
+
+    // Model roles per node. Lanes and merge use reasoning for depth.
+    // checkout_and_read, comment_draft use general (I/O focused, not analysis).
+    model_stylesheet  = "#lane_correctness { reasoning_effort: high; } #lane_architecture { reasoning_effort: high; } #lane_patterns { reasoning_effort: high; } #lane_tests { reasoning_effort: high; } #merge_findings { reasoning_effort: high; } #quality_eval { reasoning_effort: high; }"
+
+    // ── Default node and edge styles ────────────────────────────────────────
+    node [fontname="Helvetica", fontsize=11, style="filled"]
+    edge [fontname="Helvetica", fontsize=10, color="#555555"]
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PIPELINE NODES
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Entry point
+    start [
+        label     = "Start",
+        shape     = Mdiamond,
+        fillcolor = "#C8E6C9"
+    ]
+
+    // ── Phase 1: Checkout ──────────────────────────────────────────────────
+    //
+    // Fetches PR metadata + unified diff. All subsequent nodes read these values
+    // via $variable interpolation from pipeline state.
+    //
+    // WHY NOT store full file contents here: storing 100KB+ of file content in
+    // pipeline state bloats every subsequent lane prompt. Instead, each lane that
+    // needs full file content runs github_checkout_repo independently. This is
+    // the established pattern from triage-review.dot's investigate node.
+    checkout_and_read [
+        label     = "Checkout & Read",
+        shape     = box,
+        fillcolor = "#E8F5E9",
+        timeout   = "6m",
+        prompt    = "You are the checkout node in an exhaustive PR review pipeline. Your ONLY job is to fetch PR metadata and the unified diff, then emit them as JSON context_updates. Do NOT write any review findings. Do NOT post any GitHub comments.\n\nSTEP 1 — Parse the PR reference from $goal:\nExtract owner, repo, and PR number. The goal contains a URL like https://github.com/OWNER/REPO/pull/NUMBER, or OWNER/REPO#N, or just #N for the current repo. Store as OWNER, REPO, NUMBER.\nAlso extract loop state if present in $goal:\n  - Look for the pattern `loop_exhausted=true` or `loop_exhausted=false` in $goal.\n  - Look for the pattern `next_round=N` (where N is a number) in $goal.\n  - If not found, use empty string for loop_exhausted and \"1\" for next_round.\n  - Store as LOOP_EXHAUSTED and NEXT_ROUND variables.\n\nSTEP 2 — Fetch PR metadata:\n  curl -s -H \"Authorization: token ${GH_TOKEN}\" \\\n       \"https://api.github.com/repos/OWNER/REPO/pulls/NUMBER\" \\\n       -o /tmp/pr_meta.json\nExtract: .title, .body (first 400 chars), .head.ref (PR head branch), and .head.sha (PR head SHA) — store as PR_HEAD_SHA.\n\nSTEP 3 — Fetch the unified diff:\n  curl -s -H \"Authorization: token ${GH_TOKEN}\" \\\n       -H \"Accept: application/vnd.github.diff\" \\\n       \"https://api.github.com/repos/OWNER/REPO/pulls/NUMBER\" \\\n       -o /tmp/pr.diff\nRead /tmp/pr.diff. If over 150KB (wc -c), include only the first 700 lines and append: \"[DIFF TRUNCATED — full diff at https://github.com/OWNER/REPO/pull/NUMBER/files]\"\n\nSTEP 4 — Get changed file list:\n  curl -s -H \"Authorization: token ${GH_TOKEN}\" \\\n       \"https://api.github.com/repos/OWNER/REPO/pulls/NUMBER/files\" \\\n       > /tmp/pr_files.json\nExtract the .filename field from each entry. Join them as a newline-separated list.\n\nSTEP 5 — Output ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"pr_owner\": \"OWNER\", \"pr_repo\": \"REPO\", \"pr_number\": \"NUMBER\", \"pr_url\": \"https://github.com/OWNER/REPO/pull/NUMBER\", \"pr_title\": \"PR TITLE FROM META\", \"pr_description\": \"PR BODY FIRST 400 CHARS\", \"pr_head_branch\": \"HEAD BRANCH FROM META\", \"pr_head_sha\": \"PR_HEAD_SHA\", \"diff_content\": \"FULL DIFF TEXT\", \"changed_files_list\": \"path/file1.py\\npath/file2.py\\n...\", \"loop_exhausted\": \"LOOP_EXHAUSTED value\", \"next_round\": \"NEXT_ROUND value\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no explanation, no code fences."
+    ]
+
+    // ── Phase 2: Review Lanes ──────────────────────────────────────────────
+    //
+    // Each lane runs on its own thread (fresh LLM context — no cross-lane anchoring).
+    // thread_id is set on the INCOMING EDGE of each lane, not on the node itself.
+    // Each lane reads $diff_content, $pr_url, $pr_title, $pr_owner, $pr_repo,
+    // $pr_head_branch from pipeline state (available to all nodes regardless of thread).
+    // Each lane runs github_checkout_repo itself for full file reads.
+    // Each lane outputs ONLY its own findings key.
+
+    // Lane 1: Correctness
+    // Focus: logic errors, edge cases, exception handling, race conditions.
+    // Must NOT comment on naming, architecture, test coverage, or docs.
+    lane_correctness [
+        label     = "Lane: Correctness",
+        shape     = box,
+        fillcolor = "#FFEBEE",
+        timeout   = "8m",
+        prompt    = "You are the CORRECTNESS reviewer in an exhaustive parallel PR review pipeline. You have one job: find logic bugs, edge case gaps, and exception handling failures. Every other dimension (naming, architecture, test coverage, docs) is covered by other lanes — do NOT comment on those.\n\nPR: $pr_url\nTitle: $pr_title\nRepo: $pr_owner/$pr_repo\nHead branch: $pr_head_branch\n\nDIFF (unified, may be truncated for large PRs):\n$diff_content\n\nCHANGED FILES:\n$changed_files_list\n\nWORKFLOW:\n1. Read the diff above to understand what changed.\n2. Use github_checkout_repo with owner=\"$pr_owner\", repo=\"$pr_repo\", branch=\"$pr_head_branch\" to clone the repo.\n3. For each changed file: read_file the full content. Read callers and related files where needed to verify control flow.\n4. Apply the correctness checklist.\n\nCORRECTNESS CHECKLIST — examine ALL of:\n- Off-by-one errors, wrong boundary conditions, incorrect comparisons (<= vs <)\n- Unhandled edge cases: None/null inputs, empty collections, zero denominators, negative values\n- Exception handling: bare except, swallowed exceptions, wrong exception types caught, missing finally/cleanup\n- Race conditions, missing locks, shared-state mutations across threads\n- Incorrect assumptions about API contracts (return types, error modes, ordering)\n- Type coercion surprises, integer overflow, silent truncation\n- Control flow bugs: early return that skips cleanup, unreachable branches that should be reachable\n- Resource leaks: file handles, network connections, locks not released on error paths\n\nFor EVERY finding: cite file:line. No finding without a specific location.\nIf you find nothing wrong: state \"(none found)\" explicitly — do not invent issues.\n\nINLINE COMMENT CONSTRUCTION:\nFor each finding, also build a structured inline comment object. Read the exact current line(s) at the cited file:line from the checked-out repo (use read_file or bash cat with line numbers). Then determine the corrected replacement.\n\nRules for suggestions:\n- PROVIDE a suggestion when the fix is a drop-in replacement for 1–4 lines (a rename, a null-check, a type fix, a typo, etc.)\n- Set suggestion to null when the fix requires: adding new code elsewhere, multi-file refactoring, or architectural redesign\n- The suggestion value must be the EXACT replacement lines (no file:line prefix, no explanation — just the code that should replace those lines)\n- For multi-line suggestions, set start_line to the first line and line to the last line\n\nOutput ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"correctness_findings\": \"## Correctness Lane\\n\\n**Verdict:** pass|changes_requested\\n**Summary:** one-line summary\\n\\n### Issues\\n- [CRITICAL|HIGH|MEDIUM|LOW] `file.py:42` — what is wrong — how to fix it\\n\\n(or '(none found)' if clean)\", \"correctness_comments\": \"[{\\\"path\\\":\\\"file\\\",\\\"line\\\":N,\\\"start_line\\\":N,\\\"severity\\\":\\\"CRITICAL|HIGH|MEDIUM|LOW\\\",\\\"description\\\":\\\"...\\\",\\\"suggestion\\\":\\\"replacement code or null\\\"}]\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // Lane 2: Architecture
+    // Focus: wrong layer, tight coupling, leaky abstractions, violated boundaries.
+    // Must NOT comment on correctness bugs, naming, test coverage, or docs.
+    lane_architecture [
+        label     = "Lane: Architecture",
+        shape     = box,
+        fillcolor = "#E8EAF6",
+        timeout   = "8m",
+        prompt    = "You are the ARCHITECTURE reviewer in an exhaustive parallel PR review pipeline. You have one job: find design and structural problems — wrong layer, excessive coupling, leaky abstractions, violated module boundaries. Every other dimension (correctness, naming, test coverage, docs) is covered by other lanes — do NOT comment on those.\n\nPR: $pr_url\nTitle: $pr_title\nRepo: $pr_owner/$pr_repo\nHead branch: $pr_head_branch\n\nDIFF (unified, may be truncated for large PRs):\n$diff_content\n\nCHANGED FILES:\n$changed_files_list\n\nWORKFLOW:\n1. Read the diff above to understand what changed.\n2. Use github_checkout_repo with owner=\"$pr_owner\", repo=\"$pr_repo\", branch=\"$pr_head_branch\" to clone the repo.\n3. Read the changed files IN FULL. Read adjacent modules, interfaces, and callers to understand the design context.\n\nARCHITECTURE CHECKLIST — examine ALL of:\n- Wrong layer: business logic leaking into I/O, config leaking into core, UI concerns in domain models\n- Tight coupling: change in A forces change in B through concrete dependency instead of abstraction\n- Leaky abstraction: internal implementation detail exposed in the public interface\n- Violated module boundary: direct access to internals that should go through a defined API\n- Circular dependency introduced between packages or modules\n- Separation of concerns violated: one class/function doing two distinct jobs it shouldn't\n- Wrong extension point: PR modifies an existing class when a new subclass or plugin point is the right move\n- God object / singleton misuse: state added to a shared object that should be scoped more narrowly\n- Premature abstraction: new interface layer introduced with only one implementation and no planned second\n\nFor EVERY finding: cite file:line (or file + class/function if no single line is specific enough).\nIf you find nothing wrong: state \"(none found)\" explicitly.\n\nINLINE COMMENT CONSTRUCTION:\nFor each finding, also build a structured inline comment object. Read the exact current line(s) at the cited file:line from the checked-out repo (use read_file or bash cat with line numbers). Then determine the corrected replacement.\n\nRules for suggestions:\n- PROVIDE a suggestion when the fix is a drop-in replacement for 1–4 lines (a rename, a null-check, a type fix, a typo, etc.)\n- Set suggestion to null when the fix requires: adding new code elsewhere, multi-file refactoring, or architectural redesign\n- The suggestion value must be the EXACT replacement lines (no file:line prefix, no explanation — just the code that should replace those lines)\n- For multi-line suggestions, set start_line to the first line and line to the last line\n\nOutput ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"arch_findings\": \"## Architecture Lane\\n\\n**Verdict:** pass|changes_requested\\n**Summary:** one-line summary\\n\\n### Issues\\n- [CRITICAL|HIGH|MEDIUM|LOW] `file.py:42` — what is wrong — how to fix it\\n\\n(or '(none found)' if clean)\", \"arch_comments\": \"[{\\\"path\\\":\\\"file\\\",\\\"line\\\":N,\\\"start_line\\\":N,\\\"severity\\\":\\\"CRITICAL|HIGH|MEDIUM|LOW\\\",\\\"description\\\":\\\"...\\\",\\\"suggestion\\\":\\\"replacement code or null\\\"}]\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // Lane 3: Patterns
+    // Focus: API misuse, naming correctness, idiomatic usage, dead code, magic values.
+    // Must NOT comment on correctness, architecture, test coverage, or docs.
+    lane_patterns [
+        label     = "Lane: Patterns",
+        shape     = box,
+        fillcolor = "#E0F7FA",
+        timeout   = "7m",
+        prompt    = "You are the PATTERNS reviewer in an exhaustive parallel PR review pipeline. You have one job: find API misuse, naming problems, non-idiomatic code, and convention violations. Every other dimension (logic bugs, architecture, test coverage, docs/spelling) is covered by other lanes — do NOT comment on those.\n\nPR: $pr_url\nTitle: $pr_title\nRepo: $pr_owner/$pr_repo\nHead branch: $pr_head_branch\n\nDIFF (unified, may be truncated for large PRs):\n$diff_content\n\nCHANGED FILES:\n$changed_files_list\n\nWORKFLOW:\n1. Read the diff above to understand what changed.\n2. Use github_checkout_repo with owner=\"$pr_owner\", repo=\"$pr_repo\", branch=\"$pr_head_branch\" to clone the repo.\n3. Read the changed files and enough surrounding code to judge consistency with established conventions.\n\nPATTERNS CHECKLIST — examine ALL of:\n- API misuse: calling library/framework APIs in the wrong way, ignoring return values, wrong argument order or type\n- Misleading names: names that imply the wrong thing, inconsistent with the module's naming convention\n- Non-idiomatic constructs: code that works but is stylistically foreign (e.g. `if x == True`, manual null checks where idiomatic Optional exists)\n- Framework convention violations: wrong lifecycle hook, wrong signal/event pattern, missing decorator\n- Inconsistent error propagation: module raises where others return, or vice versa, without clear reason\n- Import hygiene: unused imports, wildcard imports, circular imports introduced by the PR\n- Magic numbers / magic strings: literal values that should be named constants or config entries\n- Dead code introduced: unreachable branches, variables assigned but never read, functions that can never be called\n- Inconsistent patterns: the PR does X in one place and Y in another for the same operation\n\nFor EVERY finding: cite file:line.\nIf you find nothing wrong: state \"(none found)\" explicitly.\n\nINLINE COMMENT CONSTRUCTION:\nFor each finding, also build a structured inline comment object. Read the exact current line(s) at the cited file:line from the checked-out repo (use read_file or bash cat with line numbers). Then determine the corrected replacement.\n\nRules for suggestions:\n- PROVIDE a suggestion when the fix is a drop-in replacement for 1–4 lines (a rename, a null-check, a type fix, a typo, etc.)\n- Set suggestion to null when the fix requires: adding new code elsewhere, multi-file refactoring, or architectural redesign\n- The suggestion value must be the EXACT replacement lines (no file:line prefix, no explanation — just the code that should replace those lines)\n- For multi-line suggestions, set start_line to the first line and line to the last line\n\nOutput ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"patterns_findings\": \"## Patterns Lane\\n\\n**Verdict:** pass|changes_requested\\n**Summary:** one-line summary\\n\\n### Issues\\n- [CRITICAL|HIGH|MEDIUM|LOW] `file.py:42` — what is wrong — how to fix it\\n\\n(or '(none found)' if clean)\", \"patterns_comments\": \"[{\\\"path\\\":\\\"file\\\",\\\"line\\\":N,\\\"start_line\\\":N,\\\"severity\\\":\\\"CRITICAL|HIGH|MEDIUM|LOW\\\",\\\"description\\\":\\\"...\\\",\\\"suggestion\\\":\\\"replacement code or null\\\"}]\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // Lane 4: Tests
+    // Focus: coverage gaps, missing test cases, test quality, assertion correctness.
+    // Must NOT comment on production code bugs, architecture, naming, or docs.
+    lane_tests [
+        label     = "Lane: Tests",
+        shape     = box,
+        fillcolor = "#FFF8E1",
+        timeout   = "7m",
+        prompt    = "You are the TESTS reviewer in an exhaustive parallel PR review pipeline. You have one job: find test coverage gaps and test quality problems. Every other dimension (production code bugs, architecture, naming, docs) is covered by other lanes — do NOT comment on those.\n\nPR: $pr_url\nTitle: $pr_title\nRepo: $pr_owner/$pr_repo\nHead branch: $pr_head_branch\n\nDIFF (unified, may be truncated for large PRs):\n$diff_content\n\nCHANGED FILES:\n$changed_files_list\n\nWORKFLOW:\n1. Read the diff to identify new/changed production code paths.\n2. Use github_checkout_repo with owner=\"$pr_owner\", repo=\"$pr_repo\", branch=\"$pr_head_branch\" to clone the repo.\n3. Read the test files IN FULL. Read the production files they cover to understand what is exercised.\n\nTESTS CHECKLIST — examine ALL of:\n- New public functions/methods/classes: does each have at least one test?\n- New code paths / branches in existing functions: are they exercised by existing or new tests?\n- Edge cases in production code: None inputs, empty collections, error paths — are these tested?\n- Regression test: if the PR claims to fix a bug, is there a test that would have caught the bug?\n- Assertion quality: do tests assert meaningful properties, or just that the code runs without error?\n- Test naming: can you understand what scenario is being tested from the test name alone?\n- Flakiness risks: time.sleep(), random values, network calls in unit tests, test order dependencies\n- Mocking correctness: is the right object being patched at the right import path?\n- Integration vs unit: are there scenarios where a unit test alone is insufficient and an integration test is needed?\n\nFor EVERY finding: cite the MISSING COVERAGE (what scenario is untested) AND the production code file:line that should be covered.\nIf coverage is complete: state \"(none found)\" explicitly.\n\nINLINE COMMENT CONSTRUCTION:\nFor each finding, also build a structured inline comment object. Read the exact current line(s) at the cited file:line from the checked-out repo (use read_file or bash cat with line numbers). Then determine the corrected replacement.\n\nRules for suggestions:\n- PROVIDE a suggestion when the fix is a drop-in replacement for 1–4 lines (a rename, a null-check, a type fix, a typo, etc.)\n- Set suggestion to null when the fix requires: adding new code elsewhere, multi-file refactoring, or architectural redesign\n- The suggestion value must be the EXACT replacement lines (no file:line prefix, no explanation — just the code that should replace those lines)\n- For multi-line suggestions, set start_line to the first line and line to the last line\n\nOutput ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"tests_findings\": \"## Tests Lane\\n\\n**Verdict:** pass|changes_requested\\n**Summary:** one-line summary\\n\\n### Issues\\n- [CRITICAL|HIGH|MEDIUM|LOW] Missing test for `prod_file.py:42` — what scenario is uncovered — what test to write\\n\\n(or '(none found)' if coverage is complete)\", \"tests_comments\": \"[{\\\"path\\\":\\\"file\\\",\\\"line\\\":N,\\\"start_line\\\":N,\\\"severity\\\":\\\"CRITICAL|HIGH|MEDIUM|LOW\\\",\\\"description\\\":\\\"...\\\",\\\"suggestion\\\":\\\"replacement code or null\\\"}]\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // Lane 5: Pedantic
+    // Focus: spelling, grammar, docstring quality, TODO comments, commented-out code.
+    // All findings are LOW severity. Reviews only the diff (not full files).
+    lane_pedantic [
+        label     = "Lane: Pedantic",
+        shape     = box,
+        fillcolor = "#F3E5F5",
+        timeout   = "5m",
+        prompt    = "You are the PEDANTIC reviewer in an exhaustive parallel PR review pipeline. You have one job: find spelling errors, grammar problems, documentation gaps, and housekeeping nitpicks. Every other dimension (logic, architecture, naming conventions beyond typos, test coverage) is covered by other lanes — do NOT comment on those. All your findings are LOW severity.\n\nThis lane reviews ONLY the diff — you do not need to check out the full repo.\n\nPR: $pr_url\nTitle: $pr_title\n\nDIFF (unified, may be truncated for large PRs):\n$diff_content\n\nPEDANTIC CHECKLIST — examine ONLY new/changed lines (+ context) for:\n- Spelling errors in comments, docstrings, variable names, or UI-facing string literals\n- Grammar errors in docstrings or inline comments that make them hard to understand\n- Missing docstring on a new public function, class, or method\n- Docstring that contradicts the actual signature (wrong param name, missing :returns:, stale description)\n- TODO/FIXME/HACK comments left without a ticket reference or brief explanation\n- Commented-out code blocks that should be removed\n- Inconsistent capitalization in comments or error messages\n- Trailing whitespace or other trivial hygiene issues visible in the diff\n\nReview ONLY lines visible in the diff above. Do NOT check out the repo.\nFor EVERY finding: cite file:line from the diff.\nIf you find nothing: state \"(none found)\" explicitly.\n\nINLINE COMMENT CONSTRUCTION:\nFor each finding, also build a structured inline comment object. Read the exact current line(s) at the cited file:line from the checked-out repo (use read_file or bash cat with line numbers). Then determine the corrected replacement.\n\nRules for suggestions:\n- PROVIDE a suggestion when the fix is a drop-in replacement for 1–4 lines (a rename, a null-check, a type fix, a typo, etc.)\n- Set suggestion to null when the fix requires: adding new code elsewhere, multi-file refactoring, or architectural redesign\n- The suggestion value must be the EXACT replacement lines (no file:line prefix, no explanation — just the code that should replace those lines)\n- For multi-line suggestions, set start_line to the first line and line to the last line\n\nOutput ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"pedantic_findings\": \"## Pedantic Lane\\n\\n**Verdict:** pass|changes_requested\\n**Summary:** one-line summary\\n\\n### Issues\\n- [LOW] `file.py:42` — what is wrong — suggestion\\n\\n(or '(none found)' if clean)\", \"pedantic_comments\": \"[{\\\"path\\\":\\\"file\\\",\\\"line\\\":N,\\\"start_line\\\":N,\\\"severity\\\":\\\"CRITICAL|HIGH|MEDIUM|LOW\\\",\\\"description\\\":\\\"...\\\",\\\"suggestion\\\":\\\"replacement code or null\\\"}]\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // ── Phase 3: Merge ──────────────────────────────────────────────────────
+    //
+    // Collects all 5 lane findings, deduplicates, prioritizes, synthesizes.
+    // Runs on merge-thread (fresh, no lane context) — reads lane outputs via $variable.
+    // On quality_eval retry: same merge-thread (sees prior attempt in history) +
+    // $quality_feedback from pipeline state explains what to fix.
+    merge_findings [
+        label     = "Merge Findings",
+        shape     = box,
+        fillcolor = "#E8F0FE",
+        timeout   = "6m",
+        prompt    = "You are the synthesis node in an exhaustive PR review pipeline. You receive structured findings from 5 independent reviewer lanes and must produce ONE comprehensive, deduplicated, prioritized review.\n\nQUALITY GATE FEEDBACK FROM PREVIOUS CYCLE (empty on first run):\n$quality_feedback\n\nIf the above feedback is non-empty, your previous synthesis was rejected. Address every failure point listed before rewriting.\n\nPR: $pr_url — $pr_title\nRepository: $pr_owner/$pr_repo\n\nRAW LANE INPUTS:\n\n--- CORRECTNESS LANE ---\n$correctness_findings\n\n--- ARCHITECTURE LANE ---\n$arch_findings\n\n--- PATTERNS LANE ---\n$patterns_findings\n\n--- TESTS LANE ---\n$tests_findings\n\n--- PEDANTIC LANE ---\n$pedantic_findings\n---\n\nRAW LANE INLINE COMMENTS (JSON arrays — may be empty [] if lane found nothing):\n--- CORRECTNESS COMMENTS ---\n$correctness_comments\n\n--- ARCHITECTURE COMMENTS ---\n$arch_comments\n\n--- PATTERNS COMMENTS ---\n$patterns_comments\n\n--- TESTS COMMENTS ---\n$tests_comments\n\n--- PEDANTIC COMMENTS ---\n$pedantic_comments\n---\n\nSYNTHESIS RULES (follow all):\n1. INCLUDE ALL: Every finding from every lane must appear in the merged review. You may not drop findings.\n2. DEDUPLICATE: If two lanes flag the same file:line for overlapping reasons, merge them into one entry and note both dimensions (e.g. \"[HIGH — correctness + patterns] file.py:42 — ...\").\n3. PRIORITIZE: Order findings CRITICAL → HIGH → MEDIUM → LOW. Within each tier, group by file.\n4. ELEVATE: If 2 or more lanes independently flag the same file (even for different reasons), elevate the combined finding by one severity tier (LOW→MEDIUM, MEDIUM→HIGH, HIGH→CRITICAL).\n5. VERDICT: Use CHANGES_REQUESTED if any CRITICAL or HIGH finding exists. Use PASS only if all remaining findings are MEDIUM or LOW.\n6. NO INVENTION: Do not add findings not present in the lane outputs. Do not invent issues or speculate.\n7. PRESERVE CITATIONS: Every finding in the merged review must carry the file:line from the lane that found it.\n8. INLINE COMMENTS: Build review_comments_json by combining all lane comment arrays:\n   a. Parse each lane\"s JSON array. Skip any that are empty or null.\n   b. DEDUPLICATE: if two lanes flag the same path+line, merge into ONE comment. Combined body should mention both lanes. Use the suggestion from whichever lane provided one (prefer the more specific fix).\n   c. FORMAT each comment body as:\n      "[SEVERITY — LANE(S)] description\n      \n      ```suggestion\n      replacement code\n      ```"\n      \n      Omit the suggestion block entirely if suggestion is null.\n   d. Output as a flat JSON array of objects with keys: path, line, start_line (omit if same as line), body.\n\nOutput ONLY this JSON (use \\n for newlines inside string values):\n{\"status\": \"success\", \"context_updates\": {\"merged_review\": \"YOUR FULL MERGED REVIEW MARKDOWN — all findings organized by severity tier, deduplicated, with file:line citations\", \"review_verdict\": \"PASS|CHANGES_REQUESTED\", \"review_summary\": \"One-line summary: verdict + most important finding or overall state\", \"review_comments_json\": \"[{\\\"path\\\":\\\"...\\\",\\\"line\\\":N,\\\"body\\\":\\\"...\\\"}]\"}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // ── Phase 4: Quality Gate ───────────────────────────────────────────────
+    //
+    // Adversarial completeness check on the SYNTHESIS (not re-reviewing the code).
+    // Runs on quality-thread (fresh adversarial context each evaluation).
+    // On FAIL: retries merge_findings only — the 5 lane sessions are preserved.
+    // On SUCCESS: continues to comment_draft.
+    //
+    // NOTE: reasoning_effort is an unquoted identifier (not a string).
+    quality_eval [
+        label            = "Quality Gate",
+        shape            = diamond,
+        fillcolor        = "#FFF9C4",
+        goal_gate        = true,
+        retry_target     = "merge_findings",
+        timeout          = "4m",
+        reasoning_effort = high,
+        prompt           = "YOUR RESPONSE MUST START WITH { — no preamble, no explanation, no text before the opening brace. The pipeline JSON-parses the first character; anything other than { causes incorrect routing.\n\nYou are an adversarial quality gate evaluating the SYNTHESIS of a parallel-lane PR review. You are NOT re-reviewing the code — you are checking that the merger did its job correctly.\n\nPR: $pr_url — $pr_title\nVERDICT: $review_verdict\n\nMERGED REVIEW TO EVALUATE:\n$merged_review\n\nLANE INPUTS (ground truth for cross-checking):\n[Correctness] $correctness_findings\n[Architecture] $arch_findings\n[Patterns] $patterns_findings\n[Tests] $tests_findings\n[Pedantic] $pedantic_findings\n\nEvaluate against ALL five criteria:\n(1) COMPLETENESS: Is every finding from every lane present in the merged review? Cross-check each lane's \"### Issues\" section against the merged output. Any dropped finding = FAIL.\n(2) EVIDENCE: Does every finding in the merged review cite a specific file:line? Findings without citations = FAIL.\n(3) DEDUPLICATION: If the same file:line was flagged by multiple lanes, is it merged into one entry (not listed twice)? Duplicates = FAIL.\n(4) VERDICT CONSISTENCY: Is the verdict CHANGES_REQUESTED when any lane found a CRITICAL or HIGH issue? Mismatch = FAIL.\n(5) SYNTHESIS QUALITY: Is the output organized by severity tier (CRITICAL→HIGH→MEDIUM→LOW) and readable as a standalone review? Raw lane dumps pasted without organization = FAIL.\n\nYour ENTIRE response must be ONLY one of these two JSON objects:\n\nOn FAIL:\n{\"status\": \"fail\", \"failure_reason\": \"Criterion N: specific reason\", \"context_updates\": {\"quality_feedback\": \"QUALITY GATE FAILED. Fix these issues in the merge:\\n- [Criterion N]: what was wrong and exactly what to do differently.\"}}\n\nOn SUCCESS:\n{\"status\": \"success\"}\n\nNo prose. No markdown. Just the JSON."
+    ]
+
+    // ── Phase 5: Post Review ─────────────────────────────────────────────────
+    //
+    // Posts ONE comprehensive PR review comment using the commenter profile.
+    // Runs on review-thread (default) — sees $merged_review, $review_verdict,
+    // $review_summary from pipeline state.
+    // llm_provider = "anthropic-commenter" selects pipeline-agent-commenter,
+    // which has github_post_comment and github_add_label tools.
+    comment_draft [
+        label        = "Post Review",
+        shape        = box,
+        fillcolor    = "#E8F0FE",
+        llm_provider = "anthropic-commenter",
+        timeout      = "5m",
+        prompt       = "Post the exhaustive PR review as BOTH an inline GitHub PR review (Files Changed tab) AND a summary comment.\n\nPR URL: $pr_url\nPR Number: $pr_number\nPR Owner/Repo: $pr_owner/$pr_repo\nPR Head SHA: $pr_head_sha\nVerdict: $review_verdict\nSummary: $review_summary\nInline comments JSON: $review_comments_json\n\nSTEP 1 — FORMAT THE SUMMARY BODY:\nWrite a concise review summary (3–5 sentences):\n- State the verdict and the most critical finding (or confirm all checks pass)\n- Note how many findings were found across all 5 lanes\n- End with: \"Full details in the inline comments on Files Changed.\" (Path A only)\nEnd with exactly ONE verdict line:\n  VERDICT: PASS\n  or\n  VERDICT: CHANGES_REQUESTED\nEnd with the humility caveat:\n> ⚠️ Automated exhaustive review — 5 independent lanes (correctness, architecture, patterns, tests, pedantic) each with fresh context. Thorough but not definitive. Human maintainer should give final approval before merging.\n\nSTEP 2 — POST THE REVIEW:\nCheck $loop_exhausted to determine context:\n\nPATH A ($loop_exhausted is empty — direct PR trigger):\n  Use bash to POST a GitHub PR Review with inline comments:\n\n  # Build the payload — pipe through python3 to safely handle JSON escaping\n  python3 -c \"\n  import json, sys\n  summary = '''SUMMARY_TEXT_HERE'''\n  verdict = '$review_verdict'\n  event = 'REQUEST_CHANGES' if verdict == 'CHANGES_REQUESTED' else 'APPROVE'\n  comments = json.loads('''$review_comments_json''' or '[]')\n  payload = {\n      'commit_id': '$pr_head_sha',\n      'body': summary,\n      'event': event,\n      'comments': comments\n  }\n  print(json.dumps(payload))\n\" > /tmp/review_payload.json\n\n  curl -s -X POST \\\n    \"https://api.github.com/repos/$pr_owner/$pr_repo/pulls/$pr_number/reviews\" \\\n    -H \"Authorization: token ${GH_TOKEN}\" \\\n    -H \"Accept: application/vnd.github.v3+json\" \\\n    -H \"Content-Type: application/json\" \\\n    -d @/tmp/review_payload.json \\\n    -o /tmp/review_response.json\n\n  Check /tmp/review_response.json for errors. If HTTP error, fall back to github_post_comment on the PR with the full merged_review text.\n\nPATH B ($loop_exhausted is non-empty — /review-pr issue trigger):\n  Parse Issue URL from $goal: find \"Issue: https://github.com/OWNER/REPO/issues/N\"\n  Post the summary (plus $merged_review full findings) as a flat comment to that ISSUE using github_post_comment.\n  Note in the comment: \"Inline suggestions are available on the PR\"s Files Changed tab if the token has cross-repo write access.\"\n  (Do NOT post to $pr_url — will 403.)\n\nSTEP 3 — APPLY LABELS:\nApply github_add_label on the appropriate target (PR for Path A, issue for Path B):\n- 'reviewed' always\n- 'changes-requested' if verdict is CHANGES_REQUESTED\n\nSTEP 4 — CONVERGENCE LOOP (Path B only — skip if $loop_exhausted is empty):\nIf $loop_exhausted is non-empty (this is a /review-pr triggered review from an issue):\n  - If verdict is PASS:\n      Post a second short comment to the issue: \"✅ Review passed — the PR meets the exhaustive review rubric (5 independent lanes: correctness, architecture, patterns, tests, pedantic).\"\n      Apply label `review-passed` to the issue.\n  - If verdict is CHANGES_REQUESTED AND $loop_exhausted is \"true\":\n      Post a comment to the issue: \"⚠️ Automated correction limit (3 rounds) reached — all findings listed above need human attention before merging.\"\n      Apply label `needs-attention`.\n  - If verdict is CHANGES_REQUESTED AND $loop_exhausted is \"false\":\n      For each referenced PR that needs changes, post this command as a comment on the same issue you used in STEP 2 (substitute real values from $pr_owner/$pr_repo/$pr_head_branch):\n        /resolve new_instance(resolver=\"dot-graph\", pipeline=\"custom\", path=\"./.amplifier-resolve/simple-fix.dot\", branch=\"$pr_head_branch\", repos=\"$pr_owner/$pr_repo\")\n      Apply label `review-round-$next_round` to the issue.\n\nSTEP 5 — OUTPUT:\n{\"status\": \"success\", \"context_updates\": {\"bridge.comment\": \"FIRST 400 CHARS OF YOUR COMMENT\", \"bridge.summary\": \"$review_summary\", \"bridge.labels\": [\"reviewed\"]}}\n\nCRITICAL: Your ENTIRE response must be ONLY the JSON object. No preamble, no code fences."
+    ]
+
+    // Pipeline exit
+    done [
+        label     = "Done",
+        shape     = Msquare,
+        fillcolor = "#FFCDD2"
+    ]
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // EDGES
+    // ══════════════════════════════════════════════════════════════════════════
+
+    start -> checkout_and_read
+
+    // checkout → Lane 1: fresh correctness-thread.
+    // fidelity="compact" avoids bloating the new session with checkout's full output;
+    // actual data ($diff_content etc.) arrives via $variable interpolation.
+    checkout_and_read -> lane_correctness [
+        thread_id = "correctness-thread",
+        fidelity  = "compact"
+    ]
+
+    // Lane → Lane: each gets its own fresh thread (no cross-lane reasoning contamination).
+    // fidelity="compact" on each transition — lanes get data via $variable, not thread history.
+    lane_correctness -> lane_architecture [
+        thread_id = "arch-thread",
+        fidelity  = "compact"
+    ]
+
+    lane_architecture -> lane_patterns [
+        thread_id = "patterns-thread",
+        fidelity  = "compact"
+    ]
+
+    lane_patterns -> lane_tests [
+        thread_id = "tests-thread",
+        fidelity  = "compact"
+    ]
+
+    lane_tests -> lane_pedantic [
+        thread_id = "pedantic-thread",
+        fidelity  = "compact"
+    ]
+
+    // Last lane → merge: fresh merge-thread for synthesis.
+    lane_pedantic -> merge_findings [
+        thread_id = "merge-thread",
+        fidelity  = "compact"
+    ]
+
+    // Merge → quality gate: fresh adversarial thread each evaluation.
+    merge_findings -> quality_eval [
+        thread_id = "quality-thread",
+        fidelity  = "compact"
+    ]
+
+    // SUCCESS: synthesis approved — post the review comment.
+    // No thread_id → default "review-thread" (comment_draft sees $merged_review etc.).
+    quality_eval -> comment_draft [
+        label     = "outcome=success",
+        condition = "outcome=success",
+        fidelity  = "compact",
+        color     = "#43A047",
+        fontcolor = "#43A047"
+    ]
+
+    // FAIL: synthesis rejected — retry ONLY merge_findings (lanes are preserved).
+    // merge-thread: merge_findings sees its prior attempt + $quality_feedback critique.
+    quality_eval -> merge_findings [
+        label     = "outcome!=success",
+        condition = "outcome!=success",
+        thread_id = "merge-thread",
+        fidelity  = "compact",
+        style     = dashed,
+        color     = "#E57373",
+        fontcolor = "#E57373"
+    ]
+
+    comment_draft -> done
+
+}

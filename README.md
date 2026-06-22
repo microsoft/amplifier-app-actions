@@ -65,6 +65,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+> **Want a more thorough review?** The [`pipelines/pr-review-exhaustive.dot`](pipelines/pr-review-exhaustive.dot) attractor pipeline runs 5 independent reviewer lanes (correctness, architecture, patterns, tests, pedantic) and posts inline annotations on the Files Changed tab. See [Attractor pipeline](#c-attractor-pipeline-attractor_source) for usage.
+
 > **Security warning:** Never use `pull_request_target` in workflows that call this action. `pull_request_target` runs with write permissions in the context of the base branch and can expose secrets to untrusted code from a fork. Use `pull_request` only. See [Preventing pwn requests](https://securitylab.github.com/research/github-actions-preventing-pwn-requests/).
 
 ## How it works
@@ -160,24 +162,45 @@ How an attractor run works:
 - Each node runs as a separate child session; analysis nodes can read code and call tools.
 - One node must be designated as the commenter by setting `llm_provider="anthropic-commenter"` on it; only that node can post comments and labels.
 
-`actions/checkout` is required for a local path (the `.dot` file lives in your repo); use a `git+https://` URI to skip the checkout step.
+`actions/checkout` is required for a local path (the `.dot` file lives in your repo); use a `git+https://` URI to reference a pipeline from this repo directly without a checkout step.
+
+#### Ready-made pipelines
+
+This repo ships ready-to-use attractor pipelines in the [`pipelines/`](pipelines/) directory. Reference them directly via `git+https://` — no local copy needed.
+
+| Pipeline | What it does |
+|----------|-------------|
+| [`pipelines/pr-review-exhaustive.dot`](pipelines/pr-review-exhaustive.dot) | **Exhaustive PR review.** 5 thread-isolated reviewer lanes (correctness · architecture · patterns · tests · pedantic), each with a fresh LLM context so lanes cannot anchor on each other's conclusions. Findings are merged, deduplicated, and prioritized by an adversarial quality gate before posting one comprehensive PR review comment with inline annotations on the Files Changed tab. |
+
+**Exhaustive PR review — zero-copy quickstart** (`actions/checkout` required for the diff):
 
 ```yaml
 - uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
 - uses: microsoft/amplifier-app-actions@main
   with:
-    attractor_source: .github/amplifier/triage-pipeline.dot
+    attractor_source: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=pipelines/pr-review-exhaustive.dot
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    GH_TOKEN: ${{ github.token }}   # pipeline nodes use curl — needs GH_TOKEN
 ```
+
+To customize the pipeline, copy `pipelines/pr-review-exhaustive.dot` to `.github/amplifier/pr-review-exhaustive.dot` in your repo and switch to a local path:
+
+```yaml
+attractor_source: .github/amplifier/pr-review-exhaustive.dot
+```
+
+A complete example workflow is at [`docs/examples/pr-review-attractor-workflow.yml`](docs/examples/pr-review-attractor-workflow.yml).
 
 **Per-repo context for attractor nodes.** The Amplifier session search path includes `$GITHUB_WORKSPACE`, so a node prompt can `@mention` a file from the consumer repo without hardcoding owner/name:
 
 ```dot
-node [prompt="@.github/amplifier/triage-context.md"]
+node [prompt="@.github/amplifier/review-context.md"]
 ```
 
-This is the recommended way to customize a shared attractor pipeline per-repo — ship the `.dot` file here and let each consumer repo provide its own `@.github/amplifier/triage-context.md` file.
+This is the recommended way to inject project-specific architecture rules, layer boundaries, or naming conventions into a shared pipeline — ship the `.dot` file here and let each consumer repo provide its own context file.
 
 ## Local vs remote sourcing
 

@@ -10,9 +10,8 @@ bundle:
 
 includes:
   # Compose the base tier — Foundation, Anthropic provider, GitHub API tools,
-  # and Attractor pipeline support. Path is relative to the action root
-  # (wrapper.py sets cwd=action_path).
-  - bundle: ./bundles/github-tools.bundle.md
+  # and Attractor pipeline support.
+  - bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/github-tools.bundle.md
 
 context:
   include:
