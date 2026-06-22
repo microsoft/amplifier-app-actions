@@ -5,7 +5,7 @@ bundle:
 
 includes:
   # Compose the DTU tier (which includes github-tools + DTU)
-  - bundle: ./github-tools-dtu.bundle.md
+  - bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/github-tools-dtu.bundle.md
   # TODO: add amplifier-dev bundle when URL is stabilised
   # - bundle: git+https://github.com/microsoft/amplifier-bundle-amplifier-dev@main
 ---
