@@ -1,0 +1,15 @@
+bundle:
+  name: app-actions-attractor
+  version: 0.1.0
+  description: >
+    Opt-in overlay that registers the @attractor: namespace so
+    dot-setup-expert's @attractor:docs/DOT-AUTHORING-GUIDE.md,
+    @attractor:docs/DOT-SYNTAX.md, and @attractor:context/pipeline-awareness.md
+    references actually resolve, instead of silently degrading (foundation's
+    mention loader is opportunistic — a missing reference is skipped, not
+    an error). Compose alongside app-actions.yaml: either a second
+    `amplifier bundle add ... --app` install, or an additional `includes:`
+    entry in your own session bundle.
+
+includes:
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=behaviors/attractor-core.yaml
