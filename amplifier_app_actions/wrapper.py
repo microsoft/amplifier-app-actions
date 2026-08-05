@@ -155,10 +155,37 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
         result_dict = result or {}
         output = result_dict.get("output") or result_dict.get("response") or ""
         if output:
-            print(f"\n[{agent_name} output]\n{str(output)}", flush=True)
+            print(f"\n[{agent_name} output]\n{output!s}", flush=True)
         return result
 
     session.coordinator.register_capability("session.spawn", spawn_capability)
+
+
+def _write_github_output(name: str, value: str) -> None:
+    """Append a ``name=value`` line to ``$GITHUB_OUTPUT`` if it is set.
+
+    Defect 4 fix: the attractor run's ``logs_root`` directory (containing
+    per-node status.json, command.txt, response.md, and graph.dot) is the
+    only durable evidence of what a pipeline actually did. It previously
+    lived only in a ``mkdtemp()`` directory that vanished with the runner ---
+    a failed run left nothing but scrollback. Surfacing it as a documented
+    action output lets a caller ``actions/upload-artifact`` it (see README),
+    including on failure (``if: always()``), which is exactly the case where
+    the evidence matters most.
+
+    No-ops outside GitHub Actions (e.g. local ``amplifier-triage`` runs,
+    unit tests) where ``GITHUB_OUTPUT`` is unset.
+    """
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if not output_path:
+        return
+    try:
+        with open(output_path, "a", encoding="utf-8") as f:
+            f.write(f"{name}={value}\n")
+    except OSError as exc:  # pragma: no cover - defensive, shouldn't happen in CI
+        logging.getLogger(__name__).warning(
+            "Failed to write GITHUB_OUTPUT entry %s=%s: %s", name, value, exc
+        )
 
 
 def _session_search_paths(cwd: str | None) -> list[Path]:
@@ -233,6 +260,7 @@ async def run(
     event_path: str = "",
     enable_reproduction: bool = False,
     action_path: Path | None = None,
+    target_dir: str = "",
 ) -> int:
     """Create an Amplifier session in-process and execute the instruction.
 
@@ -266,6 +294,11 @@ async def run(
     action_path:
         Repository root for resolving built-in bundle aliases.  Defaults to
         the parent directory of this package.
+    target_dir:
+        Workspace directory attractor pipelines should treat as their
+        working directory (``context.target_dir`` / ``graph.source_dir`` for
+        the loop-pipeline orchestrator — see ``_run_attractor``).  Only used
+        for attractor runs.  Defaults to ``$GITHUB_WORKSPACE`` when empty.
 
     Returns
     -------
@@ -326,6 +359,7 @@ async def run(
             ctx_prefix=ctx_prefix,
             bundle_path=attractor_bundle,
             cwd=action_cwd,
+            target_dir=target_dir,
         )
     else:
         return await _run_prompt_or_attractor(
@@ -342,11 +376,52 @@ async def _run_attractor(
     ctx_prefix: str,
     bundle_path: str,
     cwd: str | None = None,
+    target_dir: str = "",
 ) -> int:
     """Run an Attractor DOT pipeline in-process via the Python API (Path B).
 
     Uses the Python API (load_bundle → compose → prepare → create_initialized_session).
     spawn_capability must be registered on the loop-pipeline session directly.
+
+    Working-directory contract (Defects 2 & 3 fix)
+    -----------------------------------------------
+    loop-pipeline's ``handlers/tool.py`` (``tool_command=``) and
+    ``must_write.py`` (``must_write=``) both resolve relative paths against
+    ``context.get("context.target_dir")``, falling back to
+    ``graph.source_dir`` (tool_command only) or ``os.getcwd()``
+    (must_write's final fallback). The *established* convention for setting
+    ``context.target_dir`` is ``amplifier_module_pipeline_runner.runner.seed_context``
+    (the standalone ``pipeline-runner`` CLI), which does
+    ``context.set("context.target_dir", str(cwd))`` before driving the
+    engine directly.
+
+    The mounted ``PipelineOrchestrator.execute()`` entry point used here (via
+    ``session.execute()``) builds its own internal ``PipelineContext`` and has
+    no config seam to seed ``context.target_dir`` directly. Previously this
+    method set neither ``context.target_dir`` nor ``graph.source_dir``
+    (``dot_source`` is a string, so the parsed graph's ``source_dir`` is
+    empty) — every ``tool_command``/``must_write=`` resolution silently fell
+    through to whatever the ambient process cwd happened to be, an
+    undocumented accident of call ordering rather than an explicit contract.
+
+    Fix, in two parts:
+      1. Pass ``source_dir=<target_dir>`` in the orchestrator config — this
+         *is* an existing seam (``_resolve_dot_source()`` reads
+         ``self.config.get("source_dir")`` and seeds ``graph.source_dir``
+         when the parsed graph's own ``source_dir`` is empty), and fixes
+         ``tool_command``'s cwd resolution explicitly rather than by
+         accident.
+      2. chdir the process to ``target_dir`` for the duration of
+         ``session.execute()`` (not just bundle prep) — this makes the
+         ambient-cwd fallback that ``must_write=`` relies on
+         (``Path(os.getcwd())``) explicit and correct instead of incidental,
+         and is a defense-in-depth backstop for tool_command too (e.g. for
+         remote/git+https dot sources where ``source_dir`` handling can
+         differ).
+
+    ``target_dir`` defaults to ``$GITHUB_WORKSPACE`` (see ``run()``); when
+    neither is available (e.g. local ``amplifier-triage`` runs), behaviour
+    is unchanged from before this fix.
     """
     from amplifier_app_cli.console import console as cli_console
     from amplifier_app_cli.session_runner import (
@@ -381,18 +456,42 @@ async def _run_attractor(
 
     run_logs_root = _tempfile.mkdtemp(prefix="attractor-run-")
 
+    # Defect 4 fix: surface the logs directory as a GITHUB_OUTPUT entry
+    # BEFORE anything else can fail, so it's available even when bundle
+    # prep, session creation, or the pipeline itself blows up. A failed
+    # run's evidence (status.json, command.txt, response.md, graph.dot per
+    # node) is otherwise unreachable once the runner tears down.
+    _write_github_output("logs_dir", run_logs_root)
+
+    # Defect 2/3 fix: resolve the workspace directory the pipeline should
+    # treat as its target_dir. Falls back to $GITHUB_WORKSPACE so the
+    # default composite-action invocation gets it without any input
+    # threading; explicit target_dir (e.g. from a future action input)
+    # still wins. Empty when neither is available (local/test runs) —
+    # behaviour is then unchanged from before this fix.
+    effective_target_dir = target_dir or os.environ.get("GITHUB_WORKSPACE", "")
+
     with contextlib.chdir(cwd) if cwd else contextlib.nullcontext():
         base_bundle = await load_bundle(bundle_path)
+        orchestrator_config: dict[str, Any] = {
+            "dot_source": dot_source,
+            "logs_root": run_logs_root,
+        }
+        if effective_target_dir:
+            # Seeds graph.source_dir (see _resolve_dot_source() in
+            # loop-pipeline's __init__.py) — the fallback ToolHandler uses
+            # for tool_command= cwd resolution when context.target_dir is
+            # unset. This is the one config seam the mounted orchestrator
+            # exposes; there is no seam to set context.target_dir directly
+            # from here (see the docstring above).
+            orchestrator_config["source_dir"] = effective_target_dir
         overlay = Bundle(
             name="attractor-overlay",
             version="1.0.0",
             session={
                 "orchestrator": {
                     "module": "loop-pipeline",
-                    "config": {
-                        "dot_source": dot_source,
-                        "logs_root": run_logs_root,
-                    },
+                    "config": orchestrator_config,
                 }
             },
         )
@@ -419,15 +518,122 @@ async def _run_attractor(
         # AmplifierBackend and spawns per-node child sessions.
         _register_spawn_capability(initialized.session, prepared)
 
-        response = await initialized.session.execute(goal)
+        # Defect 2/3 fix (part 2): chdir to the workspace for the duration
+        # of the actual pipeline run (not just bundle prep above). This is
+        # what must_write='s os.getcwd() fallback resolves against, and is
+        # a defense-in-depth backstop for tool_command's cwd resolution.
+        # Scoped to only this call so it can never leak into bundle
+        # loading/prep (which needs `cwd`, the action root) or session
+        # cleanup.
+        target_dir_ctx = (
+            contextlib.chdir(effective_target_dir)
+            if effective_target_dir and os.path.isdir(effective_target_dir)
+            else contextlib.nullcontext()
+        )
+        with target_dir_ctx:
+            response = await initialized.session.execute(goal)
+
         if response:
             cli_console.print(Markdown(response))
-        return 0
+        return _exit_code_for_attractor_result(response, console=cli_console)
     except Exception as exc:  # noqa: BLE001
         cli_console.print(f"[red]Error:[/red] {exc}")
         return 1
     finally:
         await initialized.cleanup()
+
+
+# StageStatus values (amplifier_module_loop_pipeline.outcome.StageStatus)
+# that represent a converged/acceptable pipeline terminal state. Everything
+# else — "fail", "retry", "skipped", or a status this wrapper doesn't
+# recognize — is treated as a failure. Kept as plain strings (not an import)
+# because loop-pipeline is a runtime-installed dependency (via bundle
+# .prepare()), not a build-time one for this package — see pyproject.toml.
+_ATTRACTOR_SUCCESS_STATUSES = frozenset({"success", "partial_success"})
+
+
+def _exit_code_for_attractor_result(response: str, *, console: Any = None) -> int:
+    """Map the attractor pipeline's terminal result to a process exit code.
+
+    Defect 1 fix: PipelineOrchestrator.execute() (the mounted loop-pipeline
+    orchestrator invoked via ``session.execute()``) returns a JSON string
+    shaped like ``{"status": ..., "notes": ..., "failure_reason": ...,
+    "nodes_completed": ..., "node_statuses": {...}}`` (see loop-pipeline's
+    ``__init__.py``, step 13) — it does NOT raise on a FAILed pipeline.
+    Previously this wrapper returned 0 unconditionally whenever
+    ``session.execute()`` didn't raise, so a pipeline that ended FAIL
+    (budget exhausted, ``max_pipeline_duration_exceeded``, an unsatisfied
+    goal gate) produced a green check mark — the same as a converged run.
+
+    Policy (documented, not silent):
+      - ``status`` in {"success", "partial_success"} -> exit 0.
+      - ``status`` == "fail" (or any other recognized non-success terminal
+        status: "retry", "skipped" — neither of which should ever be the
+        *pipeline's* final status, but are treated as failures if they
+        somehow are) -> exit 1, with a loud, unambiguous log line naming
+        the status and the failure reason/notes.
+      - ``status`` absent, or the response isn't the expected JSON shape at
+        all -> exit 1 (FAIL CLOSED). We cannot distinguish "the pipeline
+        actually succeeded but something upstream changed the response
+        shape" from "the pipeline is silently broken" — and the entire
+        point of this fix is to stop guessing success. An unrecognized
+        shape is loudly logged so it's debuggable, not silently swallowed.
+
+    Args:
+        response: The string returned by ``session.execute(goal)``.
+        console: Optional rich Console (falls back to ``print``/``logging``
+            when not supplied, e.g. in unit tests).
+
+    Returns:
+        0 only for an explicit, recognized success status; 1 otherwise.
+    """
+    import json
+
+    def _loud(message: str) -> None:
+        if console is not None:
+            console.print(f"[red bold]{message}[/red bold]")
+        else:
+            print(message, file=sys.stderr)
+        logging.getLogger(__name__).error(message)
+
+    if not response:
+        _loud(
+            "PIPELINE FAILED: session.execute() returned an empty response "
+            "(no status to verify) — treating as failure (fail-closed policy)."
+        )
+        return 1
+
+    try:
+        parsed = json.loads(response)
+    except (json.JSONDecodeError, TypeError):
+        _loud(
+            "PIPELINE FAILED: could not parse the attractor result as JSON "
+            "— treating as failure (fail-closed policy). Raw response: "
+            f"{response[:500]!r}"
+        )
+        return 1
+
+    if not isinstance(parsed, dict) or "status" not in parsed:
+        _loud(
+            "PIPELINE FAILED: attractor result has no 'status' field — "
+            "treating as failure (fail-closed policy). This should never "
+            "happen for a well-formed PipelineOrchestrator.execute() "
+            f"result. Parsed: {parsed!r}"
+        )
+        return 1
+
+    status = str(parsed.get("status", "")).lower()
+    if status in _ATTRACTOR_SUCCESS_STATUSES:
+        return 0
+
+    failure_reason = (
+        parsed.get("failure_reason") or parsed.get("notes") or "(none given)"
+    )
+    _loud(
+        f"PIPELINE FAILED: terminal status={status!r} failure_reason={failure_reason!r} "
+        f"nodes_completed={parsed.get('nodes_completed')!r}"
+    )
+    return 1
 
 
 async def _run_prompt_or_attractor(

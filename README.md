@@ -164,6 +164,24 @@ How an attractor run works:
 
 `actions/checkout` is required for a local path (the `.dot` file lives in your repo); use a `git+https://` URI to reference a pipeline from this repo directly without a checkout step.
 
+> **⚠️ `max_pipeline_duration` units trap.** loop-pipeline's DOT parser (`_try_parse_duration`) only recognizes a unit suffix — `"4h"`, `"14400s"`, `"30m"` — and normalizes it to milliseconds internally. **A bare, unsuffixed integer (`max_pipeline_duration=14400`) is stored as-is and treated as milliseconds, NOT seconds** — `14400` is 14.4 seconds, not 4 hours. This is easy to hit if you "simplify" a working `max_pipeline_duration="4h"` down to a bare number when porting a `.dot` into CI: the pipeline will die almost immediately with `max_pipeline_duration_exceeded`. Always include a unit suffix (`h`, `m`, `s`, or `ms`) on `max_pipeline_duration`.
+>
+> **Evidence for failed runs.** Every attractor run's log directory (per-node `status.json`, `command.txt`, `response.md`, and `graph.dot`) is surfaced as the `logs_dir` action output. Upload it as an artifact — with `if: always()` so it's captured on failed runs too, which is exactly when you need it most:
+>
+> ```yaml
+> - uses: microsoft/amplifier-app-actions@main
+>   id: amplifier
+>   with:
+>     attractor_source: .github/amplifier/pr-review-exhaustive.dot
+>   env:
+>     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+> - uses: actions/upload-artifact@v4
+>   if: always()
+>   with:
+>     name: attractor-logs
+>     path: ${{ steps.amplifier.outputs.logs_dir }}
+> ```
+
 #### Ready-made pipelines
 
 This repo ships ready-to-use attractor pipelines in the [`pipelines/`](pipelines/) directory. Reference them directly via `git+https://` — no local copy needed.
@@ -256,6 +274,7 @@ The same form works for `attractor_source` (a `.dot` file) and `recipe_source` (
 | `model` | *Accepted but currently a no-op — the bundle controls provider/model.* | — |
 | `github_token` | GitHub token for API calls | `${{ github.token }}` |
 | `enable_reproduction` | When `true`, installs Incus and upgrades to `github-tools-dtu`. Requires `ubuntu-latest` full VM runner (not a container-based runner). | `false` |
+| `target_dir` | Attractor runs only: working directory `tool_command=` / `must_write=` nodes resolve relative paths against. | `$GITHUB_WORKSPACE` |
 
 ## Bundles
 
