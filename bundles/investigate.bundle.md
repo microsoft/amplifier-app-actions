@@ -16,7 +16,7 @@ includes:
 
 context:
   include:
-    - investigate:context/investigate.md
+    - app-actions:context/investigate.md
 ---
 
 # investigate Bundle

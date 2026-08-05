@@ -15,8 +15,8 @@ includes:
 
 context:
   include:
-    - pr-review:context/pr-review.md
-    - pr-review:context/pr-review-workflow.md
+    - app-actions:context/pr-review.md
+    - app-actions:context/pr-review-workflow.md
 ---
 
 # pr-review Bundle

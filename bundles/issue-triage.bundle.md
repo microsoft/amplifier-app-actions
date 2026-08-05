@@ -15,7 +15,7 @@ includes:
 
 context:
   include:
-    - issue-triage:context/issue-triage.md
+    - app-actions:context/issue-triage.md
 ---
 
 # issue-triage Bundle

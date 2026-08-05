@@ -444,19 +444,39 @@ For a pull request event, replace `"issue"` with `"pull_request"` and add `"base
 
 ## Get help setting up
 
-Load the `app-actions` bundle in your local Amplifier session for AI-assisted help configuring workflows, writing prompts, or designing attractor pipelines:
+Install the setup-expert behavior into your local Amplifier sessions:
 
 ```bash
-amplifier run --bundle git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md
+amplifier bundle add git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=behaviors/app-actions.yaml --app
 ```
 
-Then ask naturally:
+This carries zero always-on cost — it only makes the `/github-actions` mode available. Activate
+it in any session, then ask naturally:
+
+```
+/github-actions
+```
 
 - *"Help me set up issue triage and PR reviews for my repo"* — produces ready-to-use workflow YAML with correct permissions, bot-comment guards, and sane default prompts.
 - *"Create a .dot attractor pipeline for manager-supervisor issue investigation"* — designs the pipeline with quality gate, thread isolation, and comment-draft node.
 - *"Show me the full four-workflow pattern"* — issue triage, investigation, PR review, and triage-continue with slash commands.
 
-Two expert agents are available: `app-actions-expert` (workflow setup) and `dot-setup-expert` (attractor pipeline design). The session routes to the right one based on your question — you don't call them directly.
+Three expert agents are available: `github-actions-expert` (front door — start here), `app-actions-expert` (workflow YAML), and `dot-setup-expert` (attractor pipeline design). The session routes to the right one based on your question — you don't call them directly.
+
+**Optional:** if you want `dot-setup-expert` to have the full attractor DOT documentation (rather
+than a reference that silently degrades if attractor isn't otherwise composed into your session),
+add the opt-in overlay too:
+
+```bash
+amplifier bundle add git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=behaviors/app-actions-attractor.yaml --app
+```
+
+Prefer a one-off session instead of a persistent `--app` install? Run the standalone bundle
+directly (no `--app`, nothing added to your registry):
+
+```bash
+amplifier run --bundle git+https://github.com/microsoft/amplifier-app-actions@main "Help me set up issue triage"
+```
 
 ## Versioning
 
