@@ -30,6 +30,7 @@ def main() -> None:
             event_path=os.getenv("GITHUB_EVENT_PATH", ""),
             enable_reproduction=os.getenv("INPUT_ENABLE_REPRODUCTION", "").lower()
             == "true",
+            target_dir=os.getenv("INPUT_TARGET_DIR", ""),
         )
     )
     sys.exit(returncode)

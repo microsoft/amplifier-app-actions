@@ -18,9 +18,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from amplifier_app_actions.wrapper import run
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -289,6 +287,9 @@ async def test_attractor_builds_overlay_and_executes(tmp_path):
     attractor_file.write_text(dot_source)
 
     mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success", "notes": "ok"})
+    )
     captured_bundle_kwargs: list = []
 
     with _attractor_in_process(
@@ -326,6 +327,9 @@ async def test_attractor_goal_derived_from_event(tmp_path):
     event_file.write_text(json.dumps(_ISSUE_EVENT))
 
     mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success", "notes": "ok"})
+    )
 
     with _attractor_in_process(mock_initialized):
         await run(
@@ -605,6 +609,9 @@ async def test_run_attractor_reads_dot_and_configures_loop_pipeline(tmp_path):
     dot_file.write_text(dot_source)
 
     mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success", "notes": "ok"})
+    )
     captured_bundle_kwargs: list = []
 
     with _attractor_in_process(
@@ -752,3 +759,373 @@ def test_session_search_paths_ignores_nonexistent_workspace(tmp_path, monkeypatc
     paths = _session_search_paths(str(action_root))
 
     assert paths == [Path(action_root)]
+
+
+# ---------------------------------------------------------------------------
+# Defect 1: a FAILed pipeline must exit non-zero, not 0
+# ---------------------------------------------------------------------------
+
+
+async def test_attractor_fail_status_yields_nonzero_exit(tmp_path):
+    """A pipeline that terminates with status=fail must NOT return exit 0.
+
+    Regression guard for the "green check mark on a failed convergence run"
+    defect: session.execute() not raising is not the same as the pipeline
+    succeeding — PipelineOrchestrator.execute() returns a JSON string with a
+    'status' field and does not raise on FAIL. Without the fix, this test
+    fails (result == 0) because _run_attractor never inspected the status.
+    """
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps(
+            {
+                "status": "fail",
+                "notes": "Pipeline completed: 1/2 nodes succeeded.",
+                "failure_reason": "max_pipeline_duration_exceeded",
+                "nodes_completed": 1,
+                "node_statuses": {"A": "fail"},
+            }
+        )
+    )
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result != 0, (
+        "A FAIL pipeline status must not yield exit 0 (green check mark on "
+        "a failed convergence run)"
+    )
+
+
+async def test_attractor_partial_success_yields_zero_exit(tmp_path):
+    """status=partial_success is a converged, acceptable terminal state."""
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "partial_success", "notes": "ok"})
+    )
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result == 0
+
+
+async def test_attractor_missing_status_field_fails_closed(tmp_path):
+    """A response with no 'status' key must NOT silently pass as success.
+
+    Documents the fail-closed policy: we cannot tell "the pipeline actually
+    succeeded but the response shape changed" from "something is silently
+    broken", so an unrecognized/absent status is treated as a failure.
+    """
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"notes": "no status field here"})
+    )
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result != 0
+
+
+async def test_attractor_non_json_response_fails_closed(tmp_path):
+    """A non-JSON response (unexpected shape) also fails closed, not silently 0."""
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(return_value="not json at all")
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result != 0
+
+
+def test_exit_code_for_attractor_result_success_statuses():
+    """Unit-level check of the status -> exit code mapping (no mocking needed)."""
+    from amplifier_app_actions.wrapper import _exit_code_for_attractor_result
+
+    assert _exit_code_for_attractor_result(json.dumps({"status": "success"})) == 0
+    assert (
+        _exit_code_for_attractor_result(json.dumps({"status": "partial_success"})) == 0
+    )
+    assert _exit_code_for_attractor_result(json.dumps({"status": "fail"})) == 1
+    assert _exit_code_for_attractor_result(json.dumps({"status": "retry"})) == 1
+    assert _exit_code_for_attractor_result(json.dumps({"status": "skipped"})) == 1
+    assert _exit_code_for_attractor_result("") == 1
+    assert _exit_code_for_attractor_result("{}") == 1
+    assert _exit_code_for_attractor_result("not json") == 1
+
+
+# ---------------------------------------------------------------------------
+# Defects 2 & 3: tool_command / must_write= must anchor to the workspace,
+# not wherever the ambient process cwd happens to be.
+# ---------------------------------------------------------------------------
+
+
+async def test_attractor_threads_target_dir_into_source_dir_config(tmp_path):
+    """target_dir is passed through as the orchestrator's source_dir config.
+
+    This is the seam ToolHandler's cwd resolution falls back to
+    (``context.get("context.target_dir") or graph.source_dir or None``) when
+    the mounted PipelineOrchestrator has no way to seed context.target_dir
+    directly. Without the fix, the orchestrator config carries only
+    dot_source/logs_root and tool_command nodes fall through to cwd=None.
+    """
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success"})
+    )
+    captured_bundle_kwargs: list = []
+
+    with _attractor_in_process(
+        mock_initialized, capture_bundle_kwargs=captured_bundle_kwargs
+    ):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+            target_dir=str(workspace),
+        )
+
+    assert len(captured_bundle_kwargs) == 1
+    orch_cfg = captured_bundle_kwargs[0]["session"]["orchestrator"]["config"]
+    assert orch_cfg.get("source_dir") == str(workspace)
+
+
+async def test_attractor_target_dir_defaults_to_github_workspace(tmp_path, monkeypatch):
+    """When target_dir isn't passed explicitly, $GITHUB_WORKSPACE is used."""
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+    workspace = tmp_path / "gha-workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success"})
+    )
+    captured_bundle_kwargs: list = []
+
+    with _attractor_in_process(
+        mock_initialized, capture_bundle_kwargs=captured_bundle_kwargs
+    ):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    orch_cfg = captured_bundle_kwargs[0]["session"]["orchestrator"]["config"]
+    assert orch_cfg.get("source_dir") == str(workspace)
+
+
+async def test_attractor_cwd_during_execute_is_target_dir(tmp_path):
+    """The process cwd during session.execute() is target_dir, not action_path.
+
+    This is what fixes must_write='s ``os.getcwd()`` fallback (must_write.py
+    has no graph.source_dir fallback, only context.target_dir then
+    os.getcwd()) — proving empirically that a must_write= relative path is
+    satisfied by a file the node wrote into the workspace, per the task's
+    request to verify Defect 3 is fixed BY Defect 2's fix rather than assumed.
+
+    Without the fix, os.getcwd() during execute() is whatever the ambient
+    cwd happened to be (action_path's original cwd in this test), which
+    would NOT equal the workspace dir asserted here.
+    """
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    action_dir = tmp_path / "action"
+    action_dir.mkdir()
+
+    captured_cwd: dict[str, str] = {}
+    mock_initialized, _ = _make_mock_initialized()
+
+    async def _capture_execute(goal):
+        captured_cwd["cwd"] = os.getcwd()
+        return json.dumps({"status": "success"})
+
+    mock_initialized.session.execute = _capture_execute
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=str(action_dir),
+            target_dir=str(workspace),
+        )
+
+    assert captured_cwd["cwd"] == str(workspace), (
+        f"Expected cwd during session.execute() to be the workspace "
+        f"({workspace}), got {captured_cwd['cwd']!r} — must_write='s "
+        "os.getcwd() fallback would resolve against the wrong directory"
+    )
+
+
+async def test_attractor_no_target_dir_preserves_prior_behavior(tmp_path, monkeypatch):
+    """With no target_dir and no GITHUB_WORKSPACE, behaviour is unchanged.
+
+    No chdir is attempted and no source_dir config key is added — this is
+    the local/test-run fallback path, not a regression vector.
+    """
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success"})
+    )
+    captured_bundle_kwargs: list = []
+
+    with _attractor_in_process(
+        mock_initialized, capture_bundle_kwargs=captured_bundle_kwargs
+    ):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result == 0
+    orch_cfg = captured_bundle_kwargs[0]["session"]["orchestrator"]["config"]
+    assert "source_dir" not in orch_cfg
+
+
+# ---------------------------------------------------------------------------
+# Defect 4: the logs_root directory must be surfaced as a GITHUB_OUTPUT entry
+# ---------------------------------------------------------------------------
+
+
+async def test_attractor_writes_logs_dir_to_github_output(tmp_path, monkeypatch):
+    """logs_root is written to $GITHUB_OUTPUT as 'logs_dir=<path>'.
+
+    Without this, a failed run's evidence (status.json/command.txt/
+    response.md/graph.dot per node) lives only in a mkdtemp() dir that is
+    discarded when the runner tears down — there is no way for a caller to
+    actions/upload-artifact it.
+    """
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+    output_file = tmp_path / "github_output.txt"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "success"})
+    )
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    output_content = output_file.read_text()
+    assert output_content.startswith("logs_dir=/"), (
+        f"Expected a logs_dir= entry in GITHUB_OUTPUT, got: {output_content!r}"
+    )
+
+
+async def test_attractor_writes_logs_dir_even_when_pipeline_fails(
+    tmp_path, monkeypatch
+):
+    """The logs_dir output must be present even for a FAILed pipeline run.
+
+    Evidence matters most exactly when the run failed — this must not be
+    contingent on success.
+    """
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+    output_file = tmp_path / "github_output.txt"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    mock_initialized, _ = _make_mock_initialized()
+    mock_initialized.session.execute = AsyncMock(
+        return_value=json.dumps({"status": "fail", "failure_reason": "boom"})
+    )
+
+    with _attractor_in_process(mock_initialized):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result != 0
+    assert output_file.read_text().startswith("logs_dir=/")
+
+
+def test_write_github_output_noop_without_env(monkeypatch):
+    """_write_github_output is a no-op when GITHUB_OUTPUT is unset (local runs)."""
+    from amplifier_app_actions.wrapper import _write_github_output
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    # Must not raise even though there's nowhere to write.
+    _write_github_output("logs_dir", "/tmp/whatever")

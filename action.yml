@@ -50,6 +50,25 @@ inputs:
       installs from the Zabbly stable channel instead.
     required: false
     default: 'false'
+  target_dir:
+    description: >-
+      Working directory an attractor_source pipeline's tool_command= and
+      must_write= nodes should resolve relative paths against. Only used for
+      attractor runs. Defaults to $GITHUB_WORKSPACE (the checked-out repo);
+      only override this if you know you need a different directory.
+    required: false
+    default: ''
+
+outputs:
+  logs_dir:
+    description: >-
+      Absolute path to the attractor pipeline run's logs directory (per-node
+      status.json, command.txt, response.md, and graph.dot). Only set for
+      attractor_source runs. The directory lives on the runner's local disk
+      and is discarded when the job ends -- upload it with
+      actions/upload-artifact (ideally with `if: always()` so it's captured
+      on failed runs too). See README "Attractor pipeline" section.
+    value: ${{ steps.run.outputs.logs_dir }}
 
 runs:
   using: 'composite'
@@ -91,6 +110,7 @@ runs:
         echo "::endgroup::"
 
     - name: Run Amplifier action
+      id: run
       shell: bash
       env:
         INPUT_PROMPT: ${{ inputs.prompt }}
@@ -102,4 +122,5 @@ runs:
         INPUT_BUNDLE: ${{ inputs.bundle }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
         INPUT_ENABLE_REPRODUCTION: ${{ inputs.enable_reproduction }}
+        INPUT_TARGET_DIR: ${{ inputs.target_dir }}
       run: uv run --project ${{ github.action_path }} python ${{ github.action_path }}/main.py
