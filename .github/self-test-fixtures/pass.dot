@@ -1,0 +1,34 @@
+// pass.dot -- Self-test fixture for the CI-correctness self-test workflow.
+//
+// Deliberately trivial: a single tool_command= node that writes a known
+// artifact into the workspace and declares must_write= on it, then reaches
+// the exit node. No LLM node anywhere in this graph -- it needs no API key.
+//
+// What running this proves (see .github/workflows/attractor-self-test.yml):
+//   - tool_command= executes with cwd == $GITHUB_WORKSPACE, not the action's
+//     own install directory (Defect 2 from PR #19).
+//   - must_write= resolves its relative path against that same workspace,
+//     not os.getcwd() at some other point in the process (Defect 3).
+//   - A converged pipeline (status: success) produces exit code 0 (the
+//     positive half of Defect 1 -- the negative half is fail.dot).
+//
+// The workflow asserts the artifact exists on disk at the workspace path
+// AFTER the action step completes -- proving the write really landed where
+// a consumer repo's own build/test steps would look for it, not just that
+// the node claimed success.
+digraph SelfTestPass {
+    graph [goal="amplifier-app-actions self-test: passing pipeline"]
+
+    start [shape=Mdiamond, label="Start"]
+
+    write_artifact [
+        shape=parallelogram,
+        label="Write workspace artifact",
+        tool_command="mkdir -p .self-test && printf 'self-test-artifact\n' > .self-test/artifact.txt && pwd",
+        must_write=".self-test/artifact.txt"
+    ]
+
+    done [shape=Msquare, label="Done"]
+
+    start -> write_artifact -> done
+}

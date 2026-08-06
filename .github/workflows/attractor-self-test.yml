@@ -1,0 +1,189 @@
+# Self-test: proves this Action's attractor_source= execution path actually
+# works end-to-end in real GitHub Actions -- not just in unit tests that call
+# amplifier_app_actions.wrapper.run() directly in-process.
+#
+# This exists because PR #19 fixed four CI-correctness defects in that path
+# (pipeline exit code, tool_command= / must_write= workspace-cwd threading,
+# logs_dir output) and every one of those fixes had only been verified by
+# reading code and by unit tests -- never by an actual GitHub Actions run.
+# This workflow closes that gap and guards against regressing any of the
+# four fixes.
+#
+# Design notes:
+#   - Both fixtures (.github/self-test-fixtures/{pass,fail}.dot) are pure
+#     tool_command= graphs with NO LLM node anywhere in them. Neither job
+#     needs ANTHROPIC_API_KEY -- this repo has no such secret configured
+#     today, and the whole point of a regression guard is that it must run
+#     on every PR without depending on secrets a fork won't have. If a
+#     secret IS configured later, it's passed through harmlessly (empty
+#     string when unset is not an error) so this keeps working either way.
+#   - attractor-pass exercises the CONVERGED path: a tool_command= node
+#     writes a known artifact into $GITHUB_WORKSPACE and declares
+#     must_write= on it, proving defects #2 and #3 (workspace cwd
+#     threading) together -- the assertion checks the file landed at the
+#     REAL workspace path on disk, not just that the node claimed success.
+#   - attractor-fail exercises the DIVERGED path: a tool_command= node that
+#     always exits 1, with no fail-routing edge, so the engine hard-fails
+#     the whole pipeline (status: "fail"). continue-on-error: true on that
+#     step means a FAIL pipeline is the CORRECT, expected result -- the job
+#     stays green because the step's outcome (not conclusion) is asserted
+#     to be "failure" in the following step. If that assertion doesn't
+#     fire, defect #1 (FAIL pipeline -> exit 0) has regressed.
+#   - Both jobs upload the run's logs_dir (defect #4) with if: always() so
+#     it's captured even if an assertion step fails.
+name: Attractor Self-Test
+
+on:
+  pull_request:
+    paths:
+      - "action.yml"
+      - "main.py"
+      - "amplifier_app_actions/**"
+      - "bundles/attractor-pipeline.bundle.md"
+      - ".github/workflows/attractor-self-test.yml"
+      - ".github/self-test-fixtures/**"
+  push:
+    branches: [main]
+    paths:
+      - "action.yml"
+      - "main.py"
+      - "amplifier_app_actions/**"
+      - "bundles/attractor-pipeline.bundle.md"
+      - ".github/workflows/attractor-self-test.yml"
+      - ".github/self-test-fixtures/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # --- Converged path: proves defects #2, #3, and the positive half of #1 ---
+  attractor-pass:
+    name: "Pipeline converges (SUCCESS) -> exit 0, artifact in workspace"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run passing attractor fixture
+        id: run_pass
+        uses: ./
+        env:
+          # Harmless if unset -- this fixture has no LLM node and needs no key.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          attractor_source: .github/self-test-fixtures/pass.dot
+
+      - name: "Assert #2 + #3: artifact was written at the REAL workspace path"
+        run: |
+          set -eu
+          artifact="$GITHUB_WORKSPACE/.self-test/artifact.txt"
+          if [ ! -f "$artifact" ]; then
+            echo "::error::Regression (Defect #2/#3): $artifact does not exist." \
+                 "tool_command= and/or must_write= are not resolving against" \
+                 "\$GITHUB_WORKSPACE."
+            exit 1
+          fi
+          if ! grep -q "self-test-artifact" "$artifact"; then
+            echo "::error::Regression: $artifact exists but has unexpected content:"
+            cat "$artifact"
+            exit 1
+          fi
+          echo "PASS: $artifact exists at the workspace path with expected content:"
+          cat "$artifact"
+
+      - name: "Assert #4: logs_dir output is populated and real"
+        run: |
+          set -eu
+          logs="${{ steps.run_pass.outputs.logs_dir }}"
+          if [ -z "$logs" ]; then
+            echo "::error::Regression (Defect #4): logs_dir action output is empty."
+            exit 1
+          fi
+          if [ ! -d "$logs" ]; then
+            echo "::error::Regression (Defect #4): logs_dir=$logs is not a directory on disk."
+            exit 1
+          fi
+          echo "PASS: logs_dir=$logs exists. Contents:"
+          find "$logs" -type f -print
+
+      - name: Upload pass-run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attractor-self-test-pass-logs
+          path: ${{ steps.run_pass.outputs.logs_dir }}
+          if-no-files-found: warn
+
+  # --- Diverged path: proves the negative half of defect #1 ---
+  attractor-fail:
+    name: "Pipeline diverges (FAIL) -> non-zero exit, job stays green"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run failing attractor fixture (this pipeline is SUPPOSED to fail)
+        id: run_fail
+        # A FAIL pipeline is the correct result for this fixture -- don't let
+        # it redden the job. The next step asserts on `outcome`, which
+        # reflects the step's real result BEFORE continue-on-error is applied.
+        continue-on-error: true
+        uses: ./
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          attractor_source: .github/self-test-fixtures/fail.dot
+
+      - name: "Assert #1: a FAIL pipeline produced a non-zero exit code"
+        run: |
+          set -eu
+          echo "run_fail step outcome=${{ steps.run_fail.outcome }} conclusion=${{ steps.run_fail.conclusion }}"
+          if [ "${{ steps.run_fail.outcome }}" != "failure" ]; then
+            echo "::error::Regression (Defect #1): the FAIL pipeline did NOT produce" \
+                 "a failing step (outcome=${{ steps.run_fail.outcome }})." \
+                 "_run_attractor() is once again returning exit 0 for a pipeline" \
+                 "that converged to status=fail."
+            exit 1
+          fi
+          echo "PASS: the FAIL pipeline correctly produced a non-zero exit code."
+
+      - name: "Assert #4: logs_dir output is populated even on a failed run"
+        run: |
+          set -eu
+          logs="${{ steps.run_fail.outputs.logs_dir }}"
+          if [ -z "$logs" ]; then
+            echo "::error::Regression (Defect #4): logs_dir action output is empty" \
+                 "for a FAILED run -- this is exactly the case where the evidence" \
+                 "matters most."
+            exit 1
+          fi
+          if [ ! -d "$logs" ]; then
+            echo "::error::Regression (Defect #4): logs_dir=$logs is not a directory on disk."
+            exit 1
+          fi
+          echo "PASS: logs_dir=$logs exists for the failed run. Contents:"
+          find "$logs" -type f -print
+
+      - name: Upload fail-run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attractor-self-test-fail-logs
+          path: ${{ steps.run_fail.outputs.logs_dir }}
+          if-no-files-found: warn
+
+  self-test-summary:
+    name: Self-test summary
+    needs: [attractor-pass, attractor-fail]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Require both jobs to have passed
+        run: |
+          echo "attractor-pass: ${{ needs.attractor-pass.result }}"
+          echo "attractor-fail: ${{ needs.attractor-fail.result }}"
+          if [ "${{ needs.attractor-pass.result }}" != "success" ] || \
+             [ "${{ needs.attractor-fail.result }}" != "success" ]; then
+            echo "::error::Attractor self-test FAILED -- see the job logs above for which assertion tripped."
+            exit 1
+          fi
+          echo "Attractor self-test PASSED: all four CI-correctness assertions hold."
