@@ -1,0 +1,43 @@
+// fail.dot -- Self-test fixture for the CI-correctness self-test workflow.
+//
+// Deliberately, deterministically converges to a FAIL terminal: a single
+// tool_command= node that always exits 1, with NO outgoing edge that
+// matches a "fail" outcome. Per the engine's edge-selection contract, a
+// plain edge is an implicit success gate -- it never fires for a FAIL
+// outcome -- so the engine finds no matching edge from this node and hard
+// -fails the whole pipeline (status: "fail", error_type: "no_matching_edge").
+//
+// No LLM node anywhere in this graph -- it needs no API key, and the
+// outcome is deterministic on every run (a shell "exit 1", not a model's
+// judgment call).
+//
+// What running this proves (see .github/workflows/attractor-self-test.yml):
+//   - Before PR #19, _run_attractor() returned exit code 0 whenever
+//     session.execute() didn't raise -- a FAIL pipeline like this one
+//     produced a GREEN check mark, indistinguishable from pass.dot.
+//   - After PR #19, _exit_code_for_attractor_result() inspects the
+//     pipeline's terminal JSON status and maps a non-success status to
+//     process exit code 1.
+//
+// The workflow runs this fixture with continue-on-error: true (a FAIL
+// pipeline is the EXPECTED, correct result here) and then asserts the
+// step's outcome was "failure" -- i.e. the action process actually exited
+// non-zero. If that assertion doesn't fire, Defect 1 has regressed.
+digraph SelfTestFail {
+    graph [goal="amplifier-app-actions self-test: pipeline that must fail"]
+
+    start [shape=Mdiamond, label="Start"]
+
+    boom [
+        shape=parallelogram,
+        label="Always fails",
+        tool_command="echo 'intentional self-test failure'; exit 1"
+    ]
+
+    done [shape=Msquare, label="Done"]
+
+    // No condition="outcome=fail" edge from boom, and the plain edge below
+    // only matches on success -- so a FAIL outcome from boom has no
+    // matching outgoing edge, and the engine hard-fails the pipeline.
+    start -> boom -> done
+}
