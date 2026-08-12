@@ -9,6 +9,7 @@ import yaml
 
 _REPO_ROOT = Path(__file__).parent.parent
 _BUNDLES_DIR = _REPO_ROOT / "bundles"
+_BEHAVIORS_DIR = _REPO_ROOT / "behaviors"
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +26,11 @@ def _parse_frontmatter(path: Path) -> dict:
     return yaml.safe_load(m.group(1)) or {}
 
 
+def _parse_yaml(path: Path) -> dict:
+    """Parse a plain YAML bundle or behavior file."""
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
 def _tool_modules(fm: dict) -> list[str]:
     return [t.get("module", "") for t in (fm.get("tools") or [])]
 
@@ -35,6 +41,56 @@ def _include_bundles(fm: dict) -> list[str]:
 
 def _provider_modules(fm: dict) -> list[str]:
     return [p.get("module", "") for p in (fm.get("providers") or [])]
+
+
+# ---------------------------------------------------------------------------
+# App-facing bundles: provider-neutral --app policy
+# ---------------------------------------------------------------------------
+
+
+def test_app_actions_behavior_remains_a_minimal_provider_neutral_anchor():
+    """The base --app behavior must not replace the user's provider or session policy."""
+    behavior = _parse_yaml(_BEHAVIORS_DIR / "app-actions.yaml")
+
+    assert set(behavior) == {"bundle"}, (
+        "behaviors/app-actions.yaml is the persistent --app install target and must "
+        "remain a metadata-only anchor. Adding providers, session, context, includes, "
+        "or other policy here would apply it to every session and can override the "
+        "user's configured provider, including OpenAI."
+    )
+
+
+def test_app_actions_attractor_overlay_only_includes_provider_neutral_core():
+    """The optional --app overlay must add only the provider-neutral attractor core."""
+    behavior = _parse_yaml(_BEHAVIORS_DIR / "app-actions-attractor.yaml")
+
+    assert not {"providers", "session", "context"} & behavior.keys(), (
+        "behaviors/app-actions-attractor.yaml is installed with --app and must not "
+        "declare provider, session, or context policy that could override user defaults."
+    )
+    assert set(behavior) == {"bundle", "includes"}
+    assert _include_bundles(behavior) == [
+        "git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=behaviors/attractor-core.yaml"
+    ], (
+        "The optional attractor overlay must include only the provider-neutral "
+        "attractor-core behavior; additional includes may introduce provider policy "
+        "into every --app-composed session."
+    )
+
+
+def test_legacy_app_actions_shim_only_includes_corrected_behavior():
+    """The legacy --app URI must remain a policy-free compatibility shim."""
+    shim = _parse_frontmatter(_BUNDLES_DIR / "app-actions.bundle.md")
+
+    assert not {"providers", "session"} & shim.keys(), (
+        "bundles/app-actions.bundle.md is still registered with --app by legacy users. "
+        "Provider or session policy here would override their configured defaults."
+    )
+    assert set(shim) == {"bundle", "includes"}
+    assert _include_bundles(shim) == ["app-actions:behaviors/app-actions"], (
+        "The legacy --app shim must include only the corrected provider-neutral base "
+        "behavior."
+    )
 
 
 # ---------------------------------------------------------------------------

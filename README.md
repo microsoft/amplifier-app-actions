@@ -4,9 +4,39 @@ AI-assisted issue triage, PR review, and investigation that runs directly inside
 
 ## Quick start
 
-Add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**), then copy the workflow below.
+### Local setup experts (provider-neutral)
 
-### Issue triage
+To make the `/github-actions` setup and debugging experts available in every local Amplifier
+session, register the base behavior once:
+
+```bash
+amplifier bundle add 'git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=behaviors/app-actions.yaml' --app
+```
+
+The `--app` flag belongs to `amplifier bundle add`, not `amplifier run`. After registration,
+normal `amplifier run` sessions compose the app behavior automatically. This behavior declares no
+provider policy, so it preserves the provider configured by the user, including OpenAI.
+
+**Optional addition:** To give `dot-setup-expert` the full Attractor DOT documentation, also
+register the provider-neutral Attractor overlay:
+
+```bash
+amplifier bundle add 'git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=behaviors/app-actions-attractor.yaml' --app
+```
+
+This overlay is an addition to `app-actions.yaml`, not a replacement for it.
+
+These local setup behaviors are separate from the GitHub Action runtime bundles below. The local
+behaviors inherit your configured provider; the purpose-built GitHub Action bundles intentionally
+use Anthropic.
+
+### GitHub Action runtime (Anthropic)
+
+Add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**),
+then copy the workflow below. These runtime bundles intentionally configure Anthropic; this does
+not change the provider used by your normal local Amplifier sessions.
+
+#### Issue triage
 
 No `actions/checkout` needed — the agent reads the event payload directly.
 
@@ -34,7 +64,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-### PR review
+#### PR review
 
 `actions/checkout` with `fetch-depth: 0` is required so the agent can read the full diff.
 
@@ -463,14 +493,11 @@ For a pull request event, replace `"issue"` with `"pull_request"` and add `"base
 
 ## Get help setting up
 
-Install the setup-expert behavior into your local Amplifier sessions:
+First complete the provider-neutral [local setup expert installation](#local-setup-experts-provider-neutral)
+from Quick Start. It carries zero always-on cost and preserves your configured provider. Normal
+`amplifier run` sessions then compose the registered behavior automatically.
 
-```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=behaviors/app-actions.yaml --app
-```
-
-This carries zero always-on cost — it only makes the `/github-actions` mode available. Activate
-it in any session, then ask naturally:
+Activate the mode in any session, then ask naturally:
 
 ```
 /github-actions
@@ -482,13 +509,8 @@ it in any session, then ask naturally:
 
 Three expert agents are available: `github-actions-expert` (front door — start here), `app-actions-expert` (workflow YAML), and `dot-setup-expert` (attractor pipeline design). The session routes to the right one based on your question — you don't call them directly.
 
-**Optional:** if you want `dot-setup-expert` to have the full attractor DOT documentation (rather
-than a reference that silently degrades if attractor isn't otherwise composed into your session),
-add the opt-in overlay too:
-
-```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=behaviors/app-actions-attractor.yaml --app
-```
+For full Attractor DOT documentation, add the optional overlay described in the
+[local installation instructions](#local-setup-experts-provider-neutral).
 
 Prefer a one-off session instead of a persistent `--app` install? Run the standalone bundle
 directly (no `--app`, nothing added to your registry):
