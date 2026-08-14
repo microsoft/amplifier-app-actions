@@ -33,7 +33,7 @@ I do not attempt review logic myself. All review work runs inside a clean-room
 
 ```
 delegate(
-    agent="app-actions:agents/pr-review-agent",
+    agent="pr-review-agent",
     instruction="<review approach (exhaustive/prompt-shot) and diff scope>",
     context_depth="none"
 )

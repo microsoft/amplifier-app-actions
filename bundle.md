@@ -109,9 +109,11 @@ command rather than answering from a silently-degraded context.
 
 `behaviors/app-actions.yaml` is the reusable capability — the correct `--app` install target.
 It carries zero includes, zero session config, zero providers: adding it via `--app` only pins
-this repo into the registry so the modes hook can discover `modes/` at the repo root. The two
-modes (`/github-actions`, `/pr-review`) contribute their expert agents dynamically via
-`contributes.agents`, loaded only while active.
+this repo into the registry so the modes hook can discover `modes/` at the repo root. The
+`/github-actions` mode contributes its expert agents dynamically via `contributes.agents`,
+loaded only while active. Local PR review is a separate Agent Skill
+(`skills/pr-review/SKILL.md`), not a mode — it is installed via `npx skill add` and delegates
+to `pr-review-agent` directly, with no `contributes.agents` involvement.
 
 This file (`bundle.md`) is the root namespace anchor AND, separately, a ready-to-run standalone
 bundle for anyone who wants a complete one-off session (foundation + the behavior) without an
@@ -128,9 +130,8 @@ app-actions repo
 │       ├── agents/github-actions-expert.md   ← heavy agent (context sink)
 │       ├── agents/app-actions-expert.md      ← heavy agent (context sink)
 │       └── agents/dot-setup-expert.md        ← heavy agent (context sink)
-└── modes/pr-review.md             ← local review mode (advertised: false)
-    └── contributes on activation:
-        └── agents/pr-review-agent.md         ← heavy agent (context sink)
+└── skills/pr-review/SKILL.md      ← local review Agent Skill (installed via `npx skill add`)
+    └── delegates directly to agents/pr-review-agent.md ← heavy agent (context sink)
 ```
 
 Token cost model:

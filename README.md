@@ -46,7 +46,7 @@ reports its findings back in the session.
 **This is a different install path from the GitHub Action runtime `pr-review` bundle** described
 below — they solve different problems:
 
-| | Skill (`npx skill add ... --skill pr-review`) | Bundle (`amplifier bundle add ...pr-review.bundle.md`) |
+| | Skill (`npx skill add ... --skill pr-review`) | Bundle (`bundle:` workflow input → `pr-review.bundle.md`) |
 |---|---|---|
 | Runs | Locally, in an interactive Amplifier session | In CI, via GitHub Actions |
 | Trigger | You ask for a review | `pull_request: [opened]` event |
