@@ -75,3 +75,11 @@ Real-path verification, not static-only: after implementation, load the new skil
 
 ## Base Commit
 `7cfd2863d79e9fe9864a46fcb91cea8efb6ee836` (main, clean working directory)
+
+## Addendum (post-implementation correction)
+The Approach/Architecture/Components sections above describe the delegation target as the
+qualified `app-actions:agents/pr-review-agent`. During implementation this form was found to be
+broken (bundle-qualified agent references do not resolve the way this doc anticipated in the
+"Error Handling" section's speculative concern). The implemented, working form is the bare
+`agent="pr-review-agent"` in `skills/pr-review/SKILL.md`. Do not "fix forward" from the qualified
+form shown elsewhere in this document — it would reintroduce the bug.

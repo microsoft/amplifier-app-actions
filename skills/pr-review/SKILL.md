@@ -9,6 +9,11 @@ description: >
 
 PR REVIEW: Local code review against a branch diff. Findings go to stdout — no GitHub post.
 
+**Dependency note:** This skill's `delegate()` call requires `pr-review-agent` to be registered
+in your session — i.e., the host app has the `app-actions` bundle/behavior installed (not merely
+the standalone skill file). Installing only this skill via `npx skill add` will not, by itself,
+make delegation work.
+
 ## Two review approaches
 
 **Exhaustive** — The agent works through 5 focused review lenses sequentially (correctness ·
@@ -31,7 +36,7 @@ Tell me what to review — I'll orient and delegate to `pr-review-agent`:
 I do not attempt review logic myself. All review work runs inside a clean-room
 `pr-review-agent` delegate with fresh context:
 
-```
+```python
 delegate(
     agent="pr-review-agent",
     instruction="<review approach (exhaustive/prompt-shot) and diff scope>",

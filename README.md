@@ -39,6 +39,11 @@ reported back directly in your session — install the `pr-review` Agent Skill:
 npx skill add microsoft/amplifier-app-actions --skill pr-review
 ```
 
+> **Dependency:** Delegation depends on `pr-review-agent` being registered in your session,
+> typically via installing the `app-actions` bundle/behavior alongside this skill (see
+> [Local setup experts](#local-setup-experts-provider-neutral) above). Installing only the
+> skill file does not register the agent.
+
 Once installed, ask any local Amplifier session to review a PR (e.g. *"review this PR"*). The
 skill delegates to a dedicated review agent for a clean-room review with fresh context, and
 reports its findings back in the session.
