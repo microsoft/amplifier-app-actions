@@ -7,7 +7,8 @@ meta:
     with quality synthesis, mirroring the structure of pipelines/pr-review-exhaustive.dot
     without needing the GHA attractor runtime. Reads diffs and full files. Outputs findings
     locally — no GitHub API calls.
-    USE WHEN: /pr-review mode is active and the user wants a local code review.
+    USE WHEN: the `pr-review` skill delegates a local code review
+    request.
     DO NOT USE WHEN: you need to post a review to an actual GitHub PR — use the GHA workflow
     with attractor_source: .../pr-review-exhaustive.dot instead.
 

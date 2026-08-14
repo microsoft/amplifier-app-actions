@@ -12,11 +12,14 @@ bundle:
 # scanning the repo root (this is structural — any composed piece of a
 # bundle's repo makes its modes/ dir discoverable, see amplifier-bundle-modes
 # "Composed bundle modes/ dirs (lazy discovery)"). That is enough for
-# /github-actions and /pr-review to become available.
+# /github-actions to become available.
 #
-# Both modes contribute their expert agents via their own
-# `contributes.agents` blocks (github-actions-expert, app-actions-expert,
-# dot-setup-expert, pr-review-agent) — loaded only while the mode is active.
+# The github-actions mode contributes its expert agents via its own
+# `contributes.agents` block (github-actions-expert, app-actions-expert,
+# dot-setup-expert) — loaded only while the mode is active. Local PR review
+# (pr-review-agent) is a separate Agent Skill, not a mode — it is installed
+# via `npx skill add` and is not activated through `contributes.agents` or
+# any mode shortcut.
 # This behavior therefore carries zero always-on tokens and zero forced
 # dependencies: no foundation include, no attractor include, no providers
 # block pinning a model. Foundation is composed by the root bundle.md for
