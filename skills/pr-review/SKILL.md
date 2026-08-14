@@ -1,22 +1,13 @@
 ---
-mode:
-  name: pr-review
-  description: >
-    Local PR review in your session — exhaustive (5 independent review lenses with quality
-    synthesis) or prompt-shot (single-pass five-check framework). No GitHub comment posted.
-    Zero context cost until activated.
-  shortcut: pr-review
-  advertised: false
-  default_action: block
-  tools:
-    safe: [bash, read_file, glob, grep, todo, delegate]
-  contributes:
-    agents:
-      pr-review-agent:
-        source: "@app-actions:agents/pr-review-agent"
+name: pr-review
+description: >
+  Local PR review in your session — exhaustive (5 independent review lenses with quality
+  synthesis) or prompt-shot (single-pass five-check framework). No GitHub comment posted.
+  Use when the user wants a local code review of a branch diff, staged changes, or PR
+  before pushing/merging.
 ---
 
-PR REVIEW MODE: Local code review against a branch diff. Findings go to stdout — no GitHub post.
+PR REVIEW: Local code review against a branch diff. Findings go to stdout — no GitHub post.
 
 ## Two review approaches
 
@@ -38,6 +29,12 @@ Tell me what to review — I'll orient and delegate to `pr-review-agent`:
 - *"Review the diff at HEAD vs origin/main, exhaustive"*
 
 I do not attempt review logic myself. All review work runs inside a clean-room
-`pr-review-agent` delegate with fresh context.
+`pr-review-agent` delegate with fresh context:
 
-Use `/mode off` when done.
+```
+delegate(
+    agent="app-actions:agents/pr-review-agent",
+    instruction="<review approach (exhaustive/prompt-shot) and diff scope>",
+    context_depth="none"
+)
+```
