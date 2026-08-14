@@ -30,6 +30,29 @@ These local setup behaviors are separate from the GitHub Action runtime bundles 
 behaviors inherit your configured provider; the purpose-built GitHub Action bundles intentionally
 use Anthropic.
 
+### PR review, locally and interactively (Agent Skill)
+
+For fast, local, in-session PR review — no GitHub comment posted, no CI run, just a review
+reported back directly in your session — install the `pr-review` Agent Skill:
+
+```bash
+npx skill add microsoft/amplifier-app-actions --skill pr-review
+```
+
+Once installed, ask any local Amplifier session to review a PR (e.g. *"review this PR"*). The
+skill delegates to a dedicated review agent for a clean-room review with fresh context, and
+reports its findings back in the session.
+
+**This is a different install path from the GitHub Action runtime `pr-review` bundle** described
+below — they solve different problems:
+
+| | Skill (`npx skill add ... --skill pr-review`) | Bundle (`amplifier bundle add ...pr-review.bundle.md`) |
+|---|---|---|
+| Runs | Locally, in an interactive Amplifier session | In CI, via GitHub Actions |
+| Trigger | You ask for a review | `pull_request: [opened]` event |
+| Output | Reported in-session | Posted as a PR comment |
+| Use it for | Local/interactive review while you work | Automated, CI-triggered review |
+
 ### GitHub Action runtime (Anthropic)
 
 Add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**),
@@ -65,6 +88,11 @@ jobs:
 ```
 
 #### PR review
+
+> **Want local, interactive review instead of a CI comment?** See
+> [PR review, locally and interactively](#pr-review-locally-and-interactively-agent-skill) above —
+> install with `npx skill add microsoft/amplifier-app-actions --skill pr-review`. This section
+> covers the separate GitHub Actions runtime path, which runs in CI and posts a comment on the PR.
 
 `actions/checkout` with `fetch-depth: 0` is required so the agent can read the full diff.
 
