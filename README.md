@@ -36,7 +36,7 @@ For fast, local, in-session PR review — no GitHub comment posted, no CI run, j
 reported back directly in your session — install the `pr-review` Agent Skill:
 
 ```bash
-npx skill add microsoft/amplifier-app-actions --skill pr-review
+npx skills add microsoft/amplifier-app-actions --skill pr-review
 ```
 
 > **Dependency:** Delegation depends on `pr-review-agent` being registered in your session,
