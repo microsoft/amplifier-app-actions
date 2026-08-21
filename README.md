@@ -58,6 +58,21 @@ below — they solve different problems:
 | Output | Reported in-session | Posted as a PR comment |
 | Use it for | Local/interactive review while you work | Automated, CI-triggered review |
 
+### Pre-push self-review (Agent Skill)
+
+For a self-contained self-review before you push a branch — catching the same issues the
+automated `review-pr-opened` GitHub Action would flag in CI — install the `pre-push-review`
+Agent Skill:
+
+```bash
+npx skills add microsoft/amplifier-app-actions --skill pre-push-review
+```
+
+Unlike `pr-review` above, this skill does its own review work inline and does not depend on
+`pr-review-agent` being registered — installing the skill file alone is sufficient. Once
+installed, ask any local Amplifier session to review your branch before pushing (e.g. *"is this
+ready to push?"*, *"pre-PR check"*).
+
 ### GitHub Action runtime (Anthropic)
 
 Add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**),
