@@ -26,7 +26,7 @@ providers:
 session:
   orchestrator:
     module: loop-pipeline
-    source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/loop-pipeline
+    source: git+https://github.com/microsoft/amplifier-bundle-dot-runner@main#subdirectory=modules/loop-pipeline
     config:
       profiles:
         anthropic: pipeline-agent-anthropic
