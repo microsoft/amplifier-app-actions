@@ -40,7 +40,7 @@ session:
 # visibility into investigate/quality_eval cycles in GH Actions logs.
 hooks:
   - module: hooks-pipeline-progress
-    source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/hooks-pipeline-progress
+    source: git+https://github.com/microsoft/amplifier-bundle-dot-runner@main#subdirectory=modules/hooks-pipeline-progress
 
 # Orchestrator-level tools (used for pipeline management, not child sessions)
 tools:
@@ -65,7 +65,7 @@ agents:
     session:
       orchestrator:
         module: loop-agent
-        source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/loop-agent
+        source: git+https://github.com/microsoft/amplifier-bundle-dot-runner@main#subdirectory=modules/loop-agent
         config:
           max_tool_rounds_per_input: 50
           default_command_timeout_ms: 120000
@@ -108,7 +108,7 @@ agents:
     session:
       orchestrator:
         module: loop-agent
-        source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/loop-agent
+        source: git+https://github.com/microsoft/amplifier-bundle-dot-runner@main#subdirectory=modules/loop-agent
         config:
           max_tool_rounds_per_input: 50
           default_command_timeout_ms: 120000
