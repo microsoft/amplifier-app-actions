@@ -15,7 +15,12 @@ dependencies = [
     # Required by loop-pipeline's manager handler — declared as a workspace peer
     # in loop-pipeline/pyproject.toml but the workspace path doesn't resolve when
     # loop-pipeline is installed from a git subdirectory URI.
-    "unified-llm-client",
+    #
+    # Package name is amplifier-unified-llm-client (renamed upstream in
+    # amplifier-bundle-attractor #50 to avoid a PyPI name collision; app-actions
+    # was pinned to a pre-rename commit, which masked the drift until this
+    # module’s source moved to amplifier-bundle-dot-runner and needed re-resolving).
+    "amplifier-unified-llm-client",
 ]
 
 [project.scripts]
@@ -32,7 +37,7 @@ package = true
 [tool.uv.sources]
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", branch = "main" }
 amplifier-app-cli = { git = "https://github.com/microsoft/amplifier-app-cli", branch = "main" }
-unified-llm-client = { git = "https://github.com/microsoft/amplifier-bundle-attractor", subdirectory = "modules/unified-llm-client", branch = "main" }
+amplifier-unified-llm-client = { git = "https://github.com/microsoft/amplifier-bundle-dot-runner", subdirectory = "modules/unified-llm-client", branch = "main" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_app_actions"]
