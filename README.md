@@ -6,6 +6,18 @@ AI-assisted issue triage, PR review, and investigation that runs directly inside
 
 ### Local setup experts (provider-neutral)
 
+If you previously registered a GitHub Action runtime bundle as a local app bundle—for example
+`bundles/pr-review.bundle.md`—remove it before adding the provider-neutral behavior:
+
+```bash
+amplifier bundle remove pr-review --app
+```
+
+`amplifier bundle remove ... --app` accepts the registered bundle name or full URI. Repeat this
+for every runtime bundle persisted with `--app`. Runtime bundles compose
+`github-tools.bundle.md`, which intentionally configures Anthropic. Persisting one with `--app`
+composes that provider policy into every local session and can lock provider choice.
+
 To make the `/github-actions` setup and debugging experts available in every local Amplifier
 session, register the base behavior once:
 
@@ -76,8 +88,10 @@ ready to push?"*, *"pre-PR check"*).
 ### GitHub Action runtime (Anthropic)
 
 Add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**),
-then copy the workflow below. These runtime bundles intentionally configure Anthropic; this does
-not change the provider used by your normal local Amplifier sessions.
+then copy the workflow below. These runtime bundles intentionally configure Anthropic. They are
+isolated from normal local Amplifier sessions only when selected for an individual Action invocation
+through the workflow step's `with:` / `bundle:` input. Do not persist a runtime bundle locally with
+`amplifier bundle add ... --app`.
 
 #### Issue triage
 
