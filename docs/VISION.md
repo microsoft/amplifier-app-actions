@@ -82,12 +82,12 @@ choice, and it rules out assuming that a moving branch will remain compatible by
 
 - A **workflow author** completes **2 representative runs** — one prompt-driven and one
   graph-driven — through the action without operating a separate orchestration service.
-- A **maintainer** observes **0 silent substitutions across 6 failure fixtures**:
-  malformed, unavailable, unsupported, human-input, timeout, and cancellation.
+- A **maintainer** observes **0 silent substitutions across 7 failure fixtures**:
+  malformed, unavailable, unsupported, execution-failed, human-input, timeout, and cancellation.
 - A **security reviewer** observes **0 approval bypasses in 1 human-input fixture**;
   that fixture ends with a failing GitHub Actions status.
 - A **workflow operator** finds **1 terminal status and 1 named cause for every run** across
-  the successful run and all **6 failure fixtures**.
+  the successful run and all **7 failure fixtures**.
 - A **workflow author** sees **0 credential values** in the resolution record, logs, and
   uploaded artifacts for both representative runs.
 - A **maintainer** advances **1 fast-moving dependency** while both representative runs

@@ -29,8 +29,9 @@ resolution:
 result: {status: success, reason: completed, contract: runtime-dependencies.v1}
 ```
 
-An incompatible result has `status: failure` and one reason: `missing`, `malformed`,
-`unavailable`, `unsupported`, `human-input-required`, `timeout`, or `cancelled`.
+A failed result has `status: failure` and one reason: `missing`, `malformed`,
+`unavailable`, `unsupported`, `execution-failed`, `human-input-required`, `timeout`, or
+`cancelled`.
 
 ## The promises
 
@@ -80,8 +81,8 @@ An incompatible result has `status: failure` and one reason: `missing`, `malform
   not allowlist rejection, and both compatible and incompatible observations.
 - Change one transitive bundle source and each adapter dependency; require changed identities
   or digest and fresh verdicts rather than reuse of the previous records.
-- Request malformed, unavailable, unsupported, human-input, timeout, and cancellation fixtures;
-  require six distinct reasons, six terminal failures, and zero substitutions.
+- Request malformed, unavailable, unsupported, execution-failed, human-input, timeout, and
+  cancellation fixtures; require seven distinct reasons, seven terminal failures, and zero substitutions.
 - Scan summaries, logs, and artifacts; require dependency identities and zero credential values.
 - Use one immutable and one mutable model fixture; require the identity marker and a fresh per-run probe for both.
 
