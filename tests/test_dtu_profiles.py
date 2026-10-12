@@ -564,13 +564,8 @@ class TestValidateAttractorProfile:
         assert profile["base"]["image"] == "ubuntu:24.04"
 
     def test_vars_declared(self, profile: dict) -> None:
-        """GITEA_URL and GITEA_TOKEN must be required; core_ref and foundation_ref optional."""
-        vars_list = profile["vars"]
-        var_names = {v["name"] for v in vars_list}
-        assert "GITEA_URL" in var_names, "GITEA_URL var not declared"
-        assert "GITEA_TOKEN" in var_names, "GITEA_TOKEN var not declared"
-        assert "core_ref" in var_names, "core_ref var not declared"
-        assert "foundation_ref" in var_names, "foundation_ref var not declared"
+        """Direct Gitea checkout needs only the URL and token, not dependency refs."""
+        assert {v["name"] for v in profile["vars"]} == {"GITEA_URL", "GITEA_TOKEN"}
 
     def test_gitea_url_required(self, profile: dict) -> None:
         gitea_url_var = next(v for v in profile["vars"] if v["name"] == "GITEA_URL")
@@ -579,16 +574,6 @@ class TestValidateAttractorProfile:
     def test_gitea_token_required(self, profile: dict) -> None:
         gitea_token_var = next(v for v in profile["vars"] if v["name"] == "GITEA_TOKEN")
         assert gitea_token_var.get("required") is True
-
-    def test_core_ref_default_empty(self, profile: dict) -> None:
-        core_ref_var = next(v for v in profile["vars"] if v["name"] == "core_ref")
-        assert core_ref_var.get("default") == ""
-
-    def test_foundation_ref_default_empty(self, profile: dict) -> None:
-        foundation_ref_var = next(
-            v for v in profile["vars"] if v["name"] == "foundation_ref"
-        )
-        assert foundation_ref_var.get("default") == ""
 
     def test_passthrough_allow_external(self, profile: dict) -> None:
         assert profile["passthrough"]["allow_external"] is True
@@ -604,30 +589,18 @@ class TestValidateAttractorProfile:
         )
         assert anthropic["key_env"] == "ANTHROPIC_API_KEY"
 
-    def test_url_rewrites_auth(self, profile: dict) -> None:
-        auth = profile["url_rewrites"]["auth"]
-        assert auth["username"] == "admin"
-        assert auth["token_var"] == "GITEA_TOKEN"
-
-    def test_url_rewrites_no_fast_path(self, profile: dict) -> None:
-        assert profile["url_rewrites"]["allow_uv_github_fast_path"] is False
-
-    def test_url_rewrites_boundary_mode(self, profile: dict) -> None:
-        assert profile["url_rewrites"]["default_match_mode"] == "boundary"
-
-    def test_url_rewrite_app_actions_rule(self, profile: dict) -> None:
-        rules = profile["url_rewrites"]["rules"]
-        matches = [r["match"] for r in rules]
-        assert "github.com/microsoft/amplifier-app-actions" in matches
-
-    def test_url_rewrite_app_actions_target(self, profile: dict) -> None:
-        rules = profile["url_rewrites"]["rules"]
-        rule = next(
-            r
-            for r in rules
-            if r["match"] == "github.com/microsoft/amplifier-app-actions"
+    def test_direct_gitea_clone_and_credentials(self, profile: dict) -> None:
+        """Direct cloning authenticates without proxy URL rewrites."""
+        install = next(
+            cmd for cmd in profile["provision"]["setup_cmds"] if "git clone" in cmd
         )
-        assert "${GITEA_URL}/admin/amplifier-app-actions" in rule["target"]
+        assert (
+            'git clone "${GITEA_URL}/admin/amplifier-app-actions.git" '
+            "/root/amplifier-app-actions"
+        ) in [line.strip() for line in install.splitlines()]
+        assert "git config --global credential.helper store" in install
+        assert '"${GITEA_TOKEN}" "${GITEA_URL#http://}"' in install
+        assert ">> /root/.git-credentials" in install
 
     def test_provision_has_setup_cmds(self, profile: dict) -> None:
         assert "setup_cmds" in profile["provision"]
@@ -670,16 +643,29 @@ class TestValidateAttractorProfile:
         assert "performance" in cmds
 
     def test_provision_installs_amplifier_triage(self, profile: dict) -> None:
-        """One step installs amplifier-app-actions via uv tool install."""
-        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
-        assert "uv tool install" in cmds
-        assert "amplifier-app-actions" in cmds
+        """Sync the checkout so bundled files and the venv CLI remain colocated."""
+        install = next(
+            cmd for cmd in profile["provision"]["setup_cmds"] if "git clone" in cmd
+        )
+        lines = [line.strip() for line in install.splitlines()]
+        assert "cd /root/amplifier-app-actions" in lines
+        assert "uv sync" in lines
+        assert lines.index("cd /root/amplifier-app-actions") < lines.index("uv sync")
+        assert ".venv/bin/amplifier-triage --help" in lines
 
-    def test_provision_writes_dot_file_via_heredoc(self, profile: dict) -> None:
-        """One step writes the attractor DOT to /root/triage.dot via DOTEOF heredoc."""
-        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
-        assert "triage.dot" in cmds
-        assert "DOTEOF" in cmds
+    def test_provision_copies_maintained_dot_fixture(self, profile: dict) -> None:
+        """Use the maintained graph, not the obsolete start/end-less heredoc."""
+        cmds = "\n".join(profile["provision"]["setup_cmds"]).replace("\\\n", "")
+        lines = [" ".join(line.split()) for line in cmds.splitlines()]
+        assert (
+            "cp /root/amplifier-app-actions/.amplifier/digital-twin-universe/"
+            "fixtures/triage.dot /root/triage.dot"
+        ) in lines
+        fixture = (_FIXTURES_DIR / "triage.dot").read_text()
+        assert "shape=Mdiamond" in fixture
+        assert "shape=Msquare" in fixture
+        assert "start -> classify" in fixture
+        assert "report -> end" in fixture
 
     def test_provision_writes_event_json_for_attractor_repo(
         self, profile: dict
@@ -902,7 +888,7 @@ class TestTriageSandboxProfile:
 
 # ---------------------------------------------------------------------------
 # Generic dependency override: pypi_overrides + url_rewrites foundation rule
-# Tests for all four workspace validate-* profiles (task-6)
+# validate-attractor deliberately uses default dependencies instead.
 # ---------------------------------------------------------------------------
 
 
@@ -950,41 +936,21 @@ class TestGenericDepOverrideValidateRecipe:
         assert "${GITEA_URL}/admin/amplifier-foundation" in rule["target"]
 
 
-class TestGenericDepOverrideValidateAttractor:
-    """pypi_overrides block and foundation url_rewrite in validate-attractor.yaml."""
+class TestDefaultDepsValidateAttractor:
+    """The direct checkout uses default deps, without implicit local overrides."""
 
     @pytest.fixture
     def profile(self) -> dict:
         return yaml.safe_load((_PROFILES_DIR / "validate-attractor.yaml").read_text())
 
-    def test_pypi_overrides_present(self, profile: dict) -> None:
-        assert "pypi_overrides" in profile, "pypi_overrides block is missing"
+    def test_no_implicit_pypi_override(self, profile: dict) -> None:
+        assert "pypi_overrides" not in profile
 
-    def test_pypi_overrides_has_amplifier_core(self, profile: dict) -> None:
-        packages = profile["pypi_overrides"]["packages"]
-        names = [p["name"] for p in packages]
-        assert "amplifier-core" in names, "pypi_overrides missing amplifier-core entry"
+    def test_no_proxy_rewrites(self, profile: dict) -> None:
+        assert "url_rewrites" not in profile
 
-    def test_amplifier_core_wheel_from_git(self, profile: dict) -> None:
-        packages = profile["pypi_overrides"]["packages"]
-        core_pkg = next(p for p in packages if p["name"] == "amplifier-core")
-        wfg = core_pkg["wheel_from_git"]
-        assert "${GITEA_URL}/admin/amplifier-core.git" in wfg["repo"]
-        assert "${core_ref}" in wfg["ref"]
-
-    def test_url_rewrite_foundation_rule(self, profile: dict) -> None:
-        rules = profile["url_rewrites"]["rules"]
-        matches = [r["match"] for r in rules]
-        assert "github.com/microsoft/amplifier-foundation" in matches
-
-    def test_url_rewrite_foundation_target(self, profile: dict) -> None:
-        rules = profile["url_rewrites"]["rules"]
-        rule = next(
-            r
-            for r in rules
-            if r["match"] == "github.com/microsoft/amplifier-foundation"
-        )
-        assert "${GITEA_URL}/admin/amplifier-foundation" in rule["target"]
+    def test_external_dependency_access(self, profile: dict) -> None:
+        assert profile["passthrough"]["allow_external"] is True
 
 
 # ---------------------------------------------------------------------------
