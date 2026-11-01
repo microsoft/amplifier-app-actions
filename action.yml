@@ -80,7 +80,7 @@ runs:
       shell: bash
       run: |
         echo "::group::uv sync"
-        uv sync --project ${{ github.action_path }}
+        uv sync --locked --project ${{ github.action_path }}
         echo "::endgroup::"
 
     - name: Set up Incus
@@ -123,4 +123,4 @@ runs:
         INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
         INPUT_ENABLE_REPRODUCTION: ${{ inputs.enable_reproduction }}
         INPUT_TARGET_DIR: ${{ inputs.target_dir }}
-      run: uv run --project ${{ github.action_path }} python ${{ github.action_path }}/main.py
+      run: uv run --locked --project ${{ github.action_path }} python ${{ github.action_path }}/main.py
