@@ -60,6 +60,17 @@ def test_app_actions_behavior_remains_a_minimal_provider_neutral_anchor():
     )
 
 
+def test_readme_migrates_runtime_app_bundle_before_provider_neutral_install():
+    """README must remove provider-pinned runtime bundles before the safe --app install."""
+    readme = (_REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    removal_command = "amplifier bundle remove pr-review --app"
+    provider_neutral_target = "#subdirectory=behaviors/app-actions.yaml"
+
+    assert removal_command in readme
+    assert provider_neutral_target in readme
+    assert readme.index(removal_command) < readme.index(provider_neutral_target)
+
+
 def test_app_actions_attractor_overlay_only_includes_provider_neutral_core():
     """The optional --app overlay must add only the provider-neutral attractor core."""
     behavior = _parse_yaml(_BEHAVIORS_DIR / "app-actions-attractor.yaml")
