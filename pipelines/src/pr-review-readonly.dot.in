@@ -36,13 +36,19 @@
 //     head and merge base trees by exact object id (the model supplies no
 //     commands or refs), reject anything missing, unsafe, binary, non-UTF-8,
 //     oversize or over budget, and print the next evidence under a fresh nonce.
-//   * review is the final model node. It answers with strict JSON that echoes
-//     the latest nonce and states whether the context was SUFFICIENT or
-//     INCOMPLETE. finalize_report accepts only SUFFICIENT with no gaps,
-//     validates the review (exact headings, verdict, citations of delivered
-//     files) and writes /project/.resolve/data/review-result.json.
-//   * Every tool node blanks the next response key, so a stale or inherited
-//     answer can never be consumed. Any infrastructure problem, rejected
+//   * review is the final model node. It answers with ONE outer JSON object
+//     whose nine context updates are individual string values (version, nonce,
+//     evaluated_head_sha, context, context_gaps, verdict, title, summary,
+//     review); the markdown is escaped once, never as nested JSON. The host
+//     exports each value as str(value) and may ignore duplicate or extra outer
+//     keys: that is host transport behavior, not a strict check made by this
+//     pipeline. finalize_report validates the nine strings strictly (exact
+//     nonce, exact head, SUFFICIENT with no gaps, exact headings, verdict,
+//     citations of delivered files) and writes
+//     /project/.resolve/data/review-result.json. The outer status stays
+//     success for both verdicts.
+//   * Every tool node blanks the next response keys (expand2 blanks all nine
+//     final fields), so a stale or inherited answer can never be consumed. Any infrastructure problem, rejected
 //     request, oversized evidence or malformed/refusing/INCOMPLETE answer fails
 //     the pipeline and writes no report. PASS -> conclusion success;
 //     CHANGES_REQUESTED -> conclusion failure; both complete the pipeline
@@ -201,18 +207,19 @@ Verdict: PASS when there are no required changes. CHANGES_REQUESTED when there i
 
 The nonce is the 32-character value printed after BEGIN UNTRUSTED PULL REQUEST DATA on the first line of this data block. It differs from the nonces of earlier rounds; copy this one exactly. evaluated_head_sha is the 40-character head commit printed in the data header.
 
-Respond with ONLY this outer JSON object: no prose before or after it and no code fences. Its single context update value is the inner JSON document, serialized as a JSON string (every double quote inside it escaped with a backslash and every line break written as a JSON escape sequence).
-{\"status\": \"success\", \"context_updates\": {\"pr_review_final_response\": \"INNER JSON DOCUMENT AS A STRING\"}}
-The inner document has exactly these keys and no others:
-version: the number 1
-nonce: the nonce
-evaluated_head_sha: the head commit
-context: SUFFICIENT or INCOMPLETE
-context_gaps: a list of strings, empty when context is SUFFICIENT
-verdict: PASS or CHANGES_REQUESTED
-title: one line, at most 150 characters
-summary: conclusion first, two or three plain-English sentences anyone can understand, then the key evidence; at most 1200 characters
-review: markdown, at most 4500 characters
+Respond with ONLY this one JSON object: no prose before or after it and no code fences. Its status is always success, even when your verdict is CHANGES_REQUESTED. Its context_updates holds exactly nine keys, and every value is a JSON string. There is no inner JSON document: escape the text once, as an ordinary JSON string value (a double quote inside a value is written with a backslash before it, and every line break inside a value is written as the JSON newline escape, a backslash followed by the letter n, never as a raw line break).
+{\"status\": \"success\", \"context_updates\": {\"pr_review_final_version\": \"1\", \"pr_review_final_nonce\": \"THE NONCE\", \"pr_review_final_evaluated_head_sha\": \"THE HEAD COMMIT\", \"pr_review_final_context\": \"SUFFICIENT\", \"pr_review_final_context_gaps\": \"\", \"pr_review_final_verdict\": \"PASS\", \"pr_review_final_title\": \"ONE LINE\", \"pr_review_final_summary\": \"SUMMARY TEXT\", \"pr_review_final_review\": \"REVIEW MARKDOWN\"}}
+The nine values are:
+pr_review_final_version: the string 1
+pr_review_final_nonce: the nonce
+pr_review_final_evaluated_head_sha: the head commit
+pr_review_final_context: SUFFICIENT or INCOMPLETE
+pr_review_final_context_gaps: an empty string when context is SUFFICIENT; otherwise one text that lists each missing file or fact separated by semicolons
+pr_review_final_verdict: PASS or CHANGES_REQUESTED
+pr_review_final_title: one line, at most 150 characters
+pr_review_final_summary: conclusion first, two or three plain-English sentences anyone can understand, then the key evidence; at most 1200 characters
+pr_review_final_review: markdown, at most 4500 characters
+Write all nine as strings, including the version. Do not add other keys.
 
 The review markdown must contain exactly these six headings, each on its own line, once each, in this order, and no other markdown heading:
 ### Necessity
@@ -233,7 +240,7 @@ $pr_review_evidence_3"
         shape        = parallelogram,
         fillcolor    = "#FFF9C4",
         timeout      = "5m",
-        tool_env     = "pr_review_final_response",
+        tool_env     = "pr_review_final_version,pr_review_final_nonce,pr_review_final_evaluated_head_sha,pr_review_final_context,pr_review_final_context_gaps,pr_review_final_verdict,pr_review_final_title,pr_review_final_summary,pr_review_final_review",
         tool_command = "@@FINALIZE_COMMAND@@"
     ]
 

@@ -234,20 +234,32 @@ def review_md(required: str = "- None") -> str:
     return "\n".join([*REVIEW_SECTIONS, required])
 
 
-def final_answer(echoed_nonce: str, head: str, **overrides) -> str:
+def final_answer(echoed_nonce: str, head: str, **overrides) -> dict:
+    """The nine flat context values a model returns (None removes a field)."""
     doc = {
-        "version": 1,
+        "version": "1",
         "nonce": echoed_nonce,
         "evaluated_head_sha": head,
         "context": "SUFFICIENT",
-        "context_gaps": [],
+        "context_gaps": "",
         "verdict": "PASS",
         "title": "Widget sizing change looks correct",
         "summary": "The change is safe to merge. It only adjusts widget sizing.",
         "review": review_md(),
     }
     doc.update(overrides)
-    return json.dumps({k: v for k, v in doc.items() if v is not None})
+    return {k: v for k, v in doc.items() if v is not None}
+
+
+FINAL_NAMES = (
+    "version", "nonce", "evaluated_head_sha", "context", "context_gaps", "verdict", "title", "summary", "review",
+)
+
+
+def final_env(answer: dict) -> dict:
+    """Exactly what the engine's tool handler exports: str(value) per field."""
+    # Only names listed in tool_env are exported; unknown fields have no authority.
+    return {prr.FINAL_ENVS[name]: str(value) for name, value in answer.items() if name in prr.FINAL_ENVS}
 
 
 def expand_stage(round_number: int, response: str | None, work: Path, out: Path) -> dict:
@@ -255,8 +267,8 @@ def expand_stage(round_number: int, response: str | None, work: Path, out: Path)
     return json.loads(prr.expand(round_number, env, work_dir=str(work), output_dir=str(out)))
 
 
-def finalize_stage(response: str | None, work: Path, out: Path):
-    env = {} if response is None else {"PR_REVIEW_FINAL_RESPONSE": response}
+def finalize_stage(response: dict | None, work: Path, out: Path):
+    env = {} if response is None else final_env(response)
     return prr.finalize(env, work_dir=str(work), output_dir=str(out))
 
 
@@ -725,8 +737,9 @@ def test_expand_round_two_follows_round_one_and_reads_the_base_side(tmp_path):
     n2 = nonce_of(second[prr.EVIDENCE_KEYS[2]])
     third = expand_stage(2, selection(2, n2, [req("tests/test_widget.py", "base", "tests of the caller")]), work, out)
     evidence3 = third[prr.EVIDENCE_KEYS[3]]
-    assert set(third) == {"pr_review_evidence_3", "pr_review_final_response"}
-    assert third["pr_review_final_response"] == ""
+    final_keys = {f"pr_review_final_{name}" for name in FINAL_NAMES}
+    assert set(third) == {"pr_review_evidence_3"} | final_keys
+    assert all(third[key] == "" for key in final_keys)
     assert "SELECTED FILE src/caller.py (side head, round 1" in evidence3
     assert "SELECTED FILE tests/test_widget.py (side base, round 2" in evidence3
     assert "cite as tests/test_widget.py@base:LINE" in evidence3
@@ -954,7 +967,7 @@ def test_poisoned_inherited_responses_are_rejected_at_the_cli(tmp_path, monkeypa
     poisoned = {
         "PR_REVIEW_SELECT1_RESPONSE": selection(1, "0" * 32, [req("src/caller.py")]),
         "PR_REVIEW_SELECT2_RESPONSE": selection(2, "0" * 32),
-        "PR_REVIEW_FINAL_RESPONSE": final_answer("0" * 32, head),
+        **final_env(final_answer("0" * 32, head)),
     }
     assert prr.main(["expand1"], poisoned) == 2
     assert "nonce does not match" in capsys.readouterr().err
@@ -1070,11 +1083,19 @@ def _cr(required):
         ({"verdict": "NEUTRAL"}, "PASS or CHANGES_REQUESTED"),
         ({"verdict": "neutral"}, "PASS or CHANGES_REQUESTED"),
         ({"verdict": "pass"}, "PASS or CHANGES_REQUESTED"),
-        ({"verdict": ["PASS"]}, "missing"),
+        ({"verdict": ["PASS"]}, "PASS or CHANGES_REQUESTED"),
+        ({"version": 1.0}, "version must be 1"),
+        ({"version": {"v": 1}}, "version must be 1"),
+        ({"version": [1]}, "version must be 1"),
+        ({"version": ""}, "version must be 1"),
+        ({"version": " 1"}, "version must be 1"),
+        ({"version": "01"}, "version must be 1"),
+        ({"nonce": ""}, "nonce does not match"),
+        ({"verdict": ""}, "empty"),
+        ({"evaluated_head_sha": ""}, "empty"),
         ({"evaluated_head_sha": "4" * 40}, "not the collected head"),
         ({"nonce": "0" * 32}, "nonce does not match"),
         ({"nonce": None}, "exactly"),
-        ({"extra": "field"}, "exactly"),
         ({"title": "two\nlines"}, "control characters"),
         ({"title": "x" * 151}, "exceeds"),
         ({"title": ""}, "empty"),
@@ -1088,9 +1109,9 @@ def _cr(required):
         ({"context_gaps": ["tests were not shown"]}, "tests were not shown"),
         ({"context": "MAYBE"}, "SUFFICIENT or INCOMPLETE"),
         ({"context": None}, "exactly"),
-        ({"context_gaps": "none"}, "list of strings"),
-        ({"context_gaps": [1]}, "list of strings"),
-        ({"context_gaps": ["x"] * 13}, "list of strings"),
+        ({"context_gaps": "none"}, "not sufficient: none"),
+        ({"context_gaps": 1}, "not sufficient: 1"),
+        ({"context_gaps": "x; " * 13}, "not sufficient: x;"),
         # review structure
         ({"review": review_md().replace("### Calibration", "### Confidence")}, "exactly the headings"),
         ({"review": review_md().replace("### Pattern\nMatches existing helpers.\n", "")}, "exactly the headings"),
@@ -1136,23 +1157,111 @@ def test_finalize_refuses_malformed_answers_and_writes_nothing(tmp_path, overrid
     assert manifest["stage"] == "review"  # a refusal never advances the stage
 
 
-def test_finalize_refuses_unparseable_final_responses(tmp_path):
+def test_finalize_refuses_missing_blank_or_oversize_final_fields(tmp_path):
     work = tmp_path / "work"
     write_manifest(work)
     out = tmp_path / "data"
-    dup = '{"version": 1, "version": 1}'
-    for text, message in (
-        (dup, "duplicate"),
-        ('{"version": NaN}', "constant"),
-        ("[]", "exactly"),
-        ("I refuse to review this pull request.", "not valid JSON"),
-        ("", "is missing"),
-        (None, "is missing"),
-        ("x" * 40000, "exceeds"),
+    blank = {name: "" for name in FINAL_NAMES}
+    absent_message = "final review response is missing: no structured answer was applied to final fields"
+    for env, message in (
+        ({}, absent_message),
+        (final_env(blank), absent_message),
+        ({prr.FINAL_ENVS["review"]: "x" * 40000}, "exceeds"),
+        ({prr.FINAL_ENVS["review"]: "\ud800" + "x"}, "not valid UTF-8"),
+        ({prr.FINAL_ENVS["review"]: "x"}, "exactly the fields"),  # one field alone: the rest are missing
     ):
         with pytest.raises(ReviewError, match=message):
-            finalize_stage(text, work, out)
+            prr.finalize(env, work_dir=str(work), output_dir=str(out))
     assert not (out / "review-result.json").exists()
+
+
+def test_finalize_total_final_size_counts_utf8_bytes_across_fields(tmp_path):
+    work = tmp_path / "work"
+    write_manifest(work)
+    out = tmp_path / "data"
+    answer = final_answer(M_NONCE, M_HEAD)
+    env = final_env(answer)
+    env[prr.FINAL_ENVS["summary"]] = "\u00e9" * 16400  # 32,800 bytes alone: over the byte budget (checked before any field limit)
+    with pytest.raises(ReviewError, match="exceeds 32768 bytes"):
+        prr.finalize(env, work_dir=str(work), output_dir=str(out))
+
+
+def test_final_from_env_is_flat_string_transport_only():
+    answer = final_answer("n" * 32, M_HEAD)
+    obj = prr.final_from_env(final_env(answer))
+    assert obj == {**answer, "version": 1, "context_gaps": []}
+    assert prr.FINAL_FIELDS == FINAL_NAMES
+    assert prr.FINAL_KEYS == {name: f"pr_review_final_{name}" for name in FINAL_NAMES}
+    assert prr.FINAL_ENVS == {name: f"PR_REVIEW_FINAL_{name.upper()}" for name in FINAL_NAMES}
+    # nothing is stripped or repaired: a JSON document in one field is just text
+    env = final_env(answer)
+    env["PR_REVIEW_FINAL_TITLE"] = json.dumps({"title": "x"})
+    assert prr.final_from_env(env)["title"] == '{"title": "x"}'
+    # numeric 1 reaches the tool as the text 1 (the host stringifies), True or 1.0 do not
+    assert prr.final_from_env(final_env(final_answer("n" * 32, M_HEAD, version=1)))["version"] == 1
+    for bad in (True, 1.0, {"a": 1}, [1]):
+        assert prr.final_from_env(final_env(final_answer("n" * 32, M_HEAD, version=bad)))["version"] != 1
+
+
+def test_finalize_accepts_numeric_version_exported_as_text(tmp_path):
+    report, _ = run_final(tmp_path, version=1)
+    assert report["conclusion"] == "success"
+
+
+def test_finalize_missing_field_is_distinct_from_blank_field(tmp_path):
+    with pytest.raises(ReviewError, match="exactly the fields"):
+        run_final(tmp_path, context_gaps=None)
+    report, _ = run_final(tmp_path / "blank", context_gaps="")
+    assert report["conclusion"] == "success"
+
+
+def test_expand2_blanks_every_final_field_so_stale_answers_cannot_survive(tmp_path):
+    up, base, head = build_pr(tmp_path)
+    first, work, out = run_collect(tmp_path, up, head, base)
+    n1 = nonce_of(first[prr.EVIDENCE_KEYS[1]])
+    second = expand_stage(1, selection(1, n1), work, out)
+    assert prr.SELECT2_KEY in second and not any(key in second for key in prr.FINAL_KEYS.values())
+    n2 = nonce_of(second[prr.EVIDENCE_KEYS[2]])
+    third = expand_stage(2, selection(2, n2), work, out)
+    n3 = nonce_of(third[prr.EVIDENCE_KEYS[3]])
+    # simulate the context after a stale full answer (old nonce) was blanked by expand2 and nothing was applied
+    stale_env = final_env(final_answer(n2, head))
+    for key, value in third.items():
+        if key.startswith("pr_review_final_"):
+            stale_env[key.upper()] = value
+    with pytest.raises(ReviewError, match="no structured answer was applied"):
+        prr.finalize(stale_env, work_dir=str(work), output_dir=str(out))
+    # a complete answer for the wrong nonce is refused even though every field is present
+    with pytest.raises(ReviewError, match="nonce does not match"):
+        finalize_stage(final_answer(n2, head), work, out)
+    assert prr.finalize(final_env(final_answer(n3, head)), work_dir=str(work), output_dir=str(out))["conclusion"] == "success"
+
+
+def test_old_nested_json_answer_shape_stays_blank_and_writes_no_report(tmp_path):
+    work = tmp_path / "work"
+    write_manifest(work)
+    out = tmp_path / "data"
+    full = final_answer(M_NONCE, M_HEAD)
+    nested = json.dumps({**full, "version": 1, "context_gaps": []})
+    truncated = nested[: len(nested) // 2]
+    for old_shape in (nested, truncated, nested.replace('"', '\\"'), nested.replace("\\n", "\n")):
+        # the old transport put the whole document in one key that no longer exists
+        with pytest.raises(ReviewError, match="no structured answer was applied"):
+            prr.finalize({"PR_REVIEW_FINAL_RESPONSE": old_shape}, work_dir=str(work), output_dir=str(out))
+    assert not (out / "review-result.json").exists()
+
+
+@pytest.mark.parametrize(
+    "review",
+    [
+        review_md().replace("Right module.", 'Quotes "double" and \'single\', backslash \\ and \\n text.\n$HOME ${PATH} $(id)'),
+        review_md().replace("Right module.", "Unicode: \u00e9\u4e2d\U0001f600 \uff04\n\n```python\n# not a heading\nprint('x')\n```"),
+    ],
+)
+def test_finalize_preserves_hostile_markdown_through_flat_env(tmp_path, review):
+    report, path = run_final(tmp_path, review=review)
+    assert report["text"].startswith(review)
+    assert json.loads(path.read_text(encoding="utf-8"))["text"] == report["text"]
 
 
 def test_finalize_cites_base_versions_with_the_base_label(tmp_path):
@@ -1246,7 +1355,7 @@ def test_finalize_cli_failure_after_manifest_save_is_nonzero_and_publishes_nothi
     out = tmp_path / "data"
     real = prr.finalize
     monkeypatch.setattr(prr, "finalize", lambda env: real(env, work_dir=str(work), output_dir=str(out)))
-    env = {"PR_REVIEW_FINAL_RESPONSE": final_answer(M_NONCE, M_HEAD)}
+    env = final_env(final_answer(M_NONCE, M_HEAD))
     monkeypatch.setattr(prr, "save_manifest", lambda *a, **k: (_ for _ in ()).throw(OSError(28, "No space left on device")))
     assert prr.main(["finalize"], env) == 1
     assert _leftovers(out) == []
@@ -1417,7 +1526,7 @@ def test_complete_scripted_run_writes_report_and_removes_repository(tmp_path):
 def test_complete_run_with_incomplete_context_writes_no_report(tmp_path):
     up, base, head = build_pr(tmp_path)
     with pytest.raises(ReviewError, match="not sufficient: the tests were not shown"):
-        run_complete(tmp_path, up, head, base, context_gaps=["the tests were not shown"], context="INCOMPLETE")
+        run_complete(tmp_path, up, head, base, context_gaps="the tests were not shown", context="INCOMPLETE")
     assert not (tmp_path / "data" / "review-result.json").exists()
 
 
@@ -1493,7 +1602,11 @@ EXPECTED_TOOL_ENV = {
     "collect_evidence": "pr_context,review_head_sha,repository_allowlist",
     "expand1": "pr_review_select1_response",
     "expand2": "pr_review_select2_response",
-    "finalize_report": "pr_review_final_response",
+    "finalize_report": (
+        "pr_review_final_version,pr_review_final_nonce,pr_review_final_evaluated_head_sha,"
+        "pr_review_final_context,pr_review_final_context_gaps,pr_review_final_verdict,"
+        "pr_review_final_title,pr_review_final_summary,pr_review_final_review"
+    ),
 }
 EXPECTED_EDGES = [
     ("start", "collect_evidence", None),
@@ -1545,6 +1658,10 @@ def test_dot_text_graph_edges_and_tool_environment():
     assert [(a, b, c or None) for a, b, c in edges] == EXPECTED_EDGES
     envs = re.findall(r'^\s+tool_env\s+= "([^"]*)",$', text, re.MULTILINE)
     assert envs == list(EXPECTED_TOOL_ENV.values())
+    assert "pr_review_final_response" not in text and "PR_REVIEW_FINAL_RESPONSE" not in text
+    assert "INNER JSON DOCUMENT" not in text
+    for name in FINAL_NAMES:
+        assert text.count(f'\\"pr_review_final_{name}\\"') == 1  # one example key each in the review prompt
     for subcommand in COMMANDS.values():
         assert text.count(f"python3 -I - {subcommand} <<'PYEOF'") == 1
     assert "python3 - " not in text
@@ -1615,7 +1732,7 @@ def test_embedded_later_stage_commands_refuse_without_a_valid_collection(tmp_pat
         os.environ,
         PR_REVIEW_SELECT1_RESPONSE=selection(1, "0" * 32),
         PR_REVIEW_SELECT2_RESPONSE=selection(2, "0" * 32),
-        PR_REVIEW_FINAL_RESPONSE=final_answer("0" * 32, HEAD),
+        **final_env(final_answer("0" * 32, HEAD)),
     )
     proc = subprocess.run(
         ["sh", "-c", render_mod.tool_command(source, subcommand)], env=env, capture_output=True, text=True, check=False
@@ -1712,10 +1829,9 @@ def test_engine_round_trips_embedded_scripts_exactly(graph):
     [
         ("select1", "pr_review_evidence_1", "pr_review_select1_response"),
         ("select2", "pr_review_evidence_2", "pr_review_select2_response"),
-        ("review", "pr_review_evidence_3", "pr_review_final_response"),
     ],
 )
-def test_engine_model_nodes_are_tool_free_and_return_the_inner_json_string(graph, monkeypatch, node_id, evidence_key, response_key):
+def test_engine_selection_nodes_are_tool_free_and_return_the_inner_json_string(graph, monkeypatch, node_id, evidence_key, response_key):
     """Drive each model node through the engine's llm-direct path with a fake client.
 
     drive_engine builds AmplifierBackend without tools; the node selects the
@@ -1733,7 +1849,7 @@ def test_engine_model_nodes_are_tool_free_and_return_the_inner_json_string(graph
     assert node.attrs.get("worker") == "llm-direct" and node.attrs.get("tool_command") is None
     assert node.attrs.get("tools") is None and node.llm_model is None and node.reasoning_effort is None
 
-    inner = selection(1, "n" * 32, [req("src/caller.py")]) if node_id != "review" else final_answer("n" * 32, M_HEAD)
+    inner = selection(1, "n" * 32, [req("src/caller.py")])
     answer = {"status": "success", "context_updates": {response_key: inner}}
     captured: dict = {}
 
@@ -1771,3 +1887,208 @@ def test_engine_model_nodes_are_tool_free_and_return_the_inner_json_string(graph
     assert captured["provider"] == "anthropic"
     assert outcome.status.value == "success"
     assert outcome.context_updates[response_key] == inner
+
+
+# ---------------------------------------------------------------------------
+# Engine-level final answer transport: model node -> context -> tool env -> finalize
+# ---------------------------------------------------------------------------
+
+PROBE_COMMAND = (
+    "python3 -I -c \"import json,os;"
+    "print(json.dumps({k: v for k, v in os.environ.items() if k.startswith('PR_REVIEW_FINAL_')}))\""
+)
+HOSTILE_MARKDOWN = (
+    'He said "hi", path C:\\temp\\new, a literal \\n, $HOME and ${PATH} and $(id), '
+    "caf\u00e9 \u4e2d\u6587 \U0001f600 and \uff04.\n\n"
+    "```python\n# not a heading\nx = \"a\\nb\"\n```\n\n~~~\n### Correctness\n~~~"
+)
+
+
+def _engine_review(graph, monkeypatch, model_text, *, stale=None):
+    """Run the REAL review node (cached engine AmplifierBackend, fake generate) and apply its updates."""
+    import asyncio
+
+    unified_llm = pytest.importorskip("unified_llm")
+    from amplifier_module_loop_pipeline.backend import AmplifierBackend
+    from amplifier_module_loop_pipeline.context import PipelineContext
+    from amplifier_module_loop_pipeline.handlers.codergen import _expand_variables
+    from amplifier_module_loop_pipeline.workers import direct_worker
+
+    captured: dict = {}
+
+    async def fake_generate(**kwargs):
+        captured.update(kwargs)
+        usage = SimpleNamespace(
+            input_tokens=1, output_tokens=1, total_tokens=2, reasoning_tokens=0,
+            cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.0,
+        )
+        return SimpleNamespace(
+            text=model_text, total_usage=usage, finish_reason=SimpleNamespace(reason="stop"), steps=[]
+        )
+
+    async def fake_model(provider, token, **kwargs):
+        return "fixture-model"
+
+    monkeypatch.setattr(unified_llm, "generate", fake_generate)
+    monkeypatch.setattr(direct_worker, "_resolve_concrete_model", fake_model)
+    context = PipelineContext()
+    for name in FINAL_NAMES:  # a stale answer from earlier, then expand2 blanks all nine fields
+        if stale is not None:
+            context.set(f"pr_review_final_{name}", stale[name])
+        context.set(f"pr_review_final_{name}", "")
+    context.set("pr_review_evidence_3", "BEGIN UNTRUSTED PULL REQUEST DATA n\nEND UNTRUSTED PULL REQUEST DATA n\n")
+    node = graph.nodes["review"]
+    prompt = _expand_variables(node.prompt, graph, context)
+    backend = AmplifierBackend(None, profiles={}, provider=object(), unified_client=object())
+    outcome = asyncio.run(backend.run(node, prompt, context, graph=graph))
+    assert captured["tools"] is None
+    context.update(outcome.context_updates or {})
+    return outcome, context, prompt
+
+
+def _engine_tool_env(graph, context, tmp_path, monkeypatch):
+    """Run the REAL ToolHandler with the real finalize_report tool_env and a probe command."""
+    import asyncio
+
+    from amplifier_module_loop_pipeline.graph import Node
+    from amplifier_module_loop_pipeline.handlers.tool import ToolHandler
+
+    for name in list(os.environ):
+        if name.startswith("PR_REVIEW_FINAL_"):
+            monkeypatch.delenv(name)
+    real = graph.nodes["finalize_report"]
+    probe = Node(
+        id="probe", shape="parallelogram",
+        attrs={"tool_command": PROBE_COMMAND, "tool_env": real.attrs["tool_env"]},
+    )
+    outcome = asyncio.run(ToolHandler().execute(probe, context, graph, str(tmp_path / "logs")))
+    if outcome.status.value != "success":
+        return outcome, None
+    return outcome, json.loads(outcome.context_updates["tool.output"])
+
+
+def _model_text(answer, **extra):
+    return json.dumps({"status": "success", "context_updates": {**{f"pr_review_final_{k}": v for k, v in answer.items()}, **extra}})
+
+
+@pytest.mark.parametrize(
+    "verdict, required",
+    [
+        ("PASS", "- None"),
+        ("CHANGES_REQUESTED", '- src/widget.py:5 says "quoted" and C:\\tmp\\new with $HOME and caf\u00e9'),
+    ],
+)
+def test_engine_flat_final_fields_reach_trusted_finalize(graph, monkeypatch, tmp_path, verdict, required):
+    review = review_md(required).replace("Right module.", HOSTILE_MARKDOWN)
+    answer = final_answer(M_NONCE, M_HEAD, verdict=verdict, review=review)
+    text = _model_text(answer, pr_review_final_extra="not exported")
+    outer = json.loads(text)  # the markdown is escaped ONCE: no value is a nested JSON document
+    assert outer["context_updates"]["pr_review_final_review"] == review
+    assert not any(value.startswith("{") for value in outer["context_updates"].values())
+
+    outcome, context, prompt = _engine_review(graph, monkeypatch, text)
+    assert outcome.status.value == "success"  # success for BOTH verdicts
+    assert "$" not in prompt and "pr_review_final_response" not in prompt
+    assert all(prompt.count(f'"pr_review_final_{name}"') >= 1 for name in FINAL_NAMES)
+    assert context.get("pr_review_final_review") == review and context.get("pr_review_final_version") == "1"
+
+    tool_outcome, env = _engine_tool_env(graph, context, tmp_path, monkeypatch)
+    assert tool_outcome.status.value == "success"
+    assert env == final_env(answer)  # exactly the nine strings, extra context keys are never exported
+    assert "PR_REVIEW_FINAL_EXTRA" not in env
+
+    work = tmp_path / "work"
+    write_manifest(work)
+    out = tmp_path / "data"
+    report = prr.finalize(env, work_dir=str(work), output_dir=str(out))
+    assert report["conclusion"] == ("success" if verdict == "PASS" else "failure")
+    assert report["text"].startswith(review)
+    assert json.loads((out / "review-result.json").read_text(encoding="utf-8")) == report
+
+
+def _malformed_model_texts():
+    good = _model_text(final_answer(M_NONCE, M_HEAD))
+    nested = json.dumps({
+        "status": "success",
+        "context_updates": {"pr_review_final_response": json.dumps(final_answer(M_NONCE, M_HEAD))},
+    })
+    return {
+        "truncated": good[: len(good) // 2],
+        "truncated-old-nested": nested[: len(nested) - 40],
+        "raw-newline": good.replace("### Necessity\\n", "### Necessity\n", 1),
+        "unescaped-quote": good.replace("Right module.", 'Right "module".', 1),
+        "prose-only": "I would approve this change.",
+    }
+
+
+@pytest.mark.parametrize("name", sorted(_malformed_model_texts()))
+def test_engine_malformed_outer_json_leaves_fields_blank_and_writes_no_report(graph, monkeypatch, tmp_path, name):
+    stale = final_answer("0" * 32, M_HEAD)
+    outcome, context, _ = _engine_review(graph, monkeypatch, _malformed_model_texts()[name], stale=stale)
+    # the host defaults unparseable text to SUCCESS and applies only its own bookkeeping keys
+    assert outcome.status.value == "success"
+    assert not any(key.startswith("pr_review_final_") for key in outcome.context_updates or {})
+    assert all(context.get(f"pr_review_final_{field}") == "" for field in FINAL_NAMES)  # stale answer was wiped
+    tool_outcome, env = _engine_tool_env(graph, context, tmp_path, monkeypatch)
+    assert tool_outcome.status.value == "success"
+    assert set(env) == {f"PR_REVIEW_FINAL_{field.upper()}" for field in FINAL_NAMES} and not any(env.values())
+    work = tmp_path / "work"
+    write_manifest(work)
+    with pytest.raises(ReviewError, match="no structured answer was applied to final fields"):
+        prr.finalize(env, work_dir=str(work), output_dir=str(tmp_path / "data"))
+    assert not (tmp_path / "data" / "review-result.json").exists()
+
+
+def test_engine_complete_answer_for_the_wrong_nonce_is_refused(graph, monkeypatch, tmp_path):
+    answer = final_answer("0" * 32, M_HEAD)
+    _, context, _ = _engine_review(graph, monkeypatch, _model_text(answer))
+    _, env = _engine_tool_env(graph, context, tmp_path, monkeypatch)
+    work = tmp_path / "work"
+    write_manifest(work)
+    with pytest.raises(ReviewError, match="nonce does not match"):
+        prr.finalize(env, work_dir=str(work), output_dir=str(tmp_path / "data"))
+
+
+@pytest.mark.parametrize(
+    "version, accepted",
+    [(1, True), ("1", True), (True, False), (1.0, False), ({"v": 1}, False), ([1], False), ("2", False), ("", False)],
+)
+def test_engine_version_is_stringified_by_the_host(graph, monkeypatch, tmp_path, version, accepted):
+    from amplifier_module_loop_pipeline.context import PipelineContext
+
+    context = PipelineContext()
+    for name, value in final_answer(M_NONCE, M_HEAD, version=version).items():
+        context.set(f"pr_review_final_{name}", value)
+    tool_outcome, env = _engine_tool_env(graph, context, tmp_path, monkeypatch)
+    assert tool_outcome.status.value == "success"
+    work = tmp_path / "work"
+    write_manifest(work)
+    if accepted:
+        assert prr.finalize(env, work_dir=str(work), output_dir=str(tmp_path / "data"))["conclusion"] == "success"
+    else:
+        with pytest.raises(ReviewError, match="version must be 1"):
+            prr.finalize(env, work_dir=str(work), output_dir=str(tmp_path / "data"))
+
+
+def test_engine_null_context_value_is_missing_not_inherited(graph, monkeypatch, tmp_path):
+    from amplifier_module_loop_pipeline.context import PipelineContext
+
+    context = PipelineContext()
+    for name, value in final_answer(M_NONCE, M_HEAD).items():
+        context.set(f"pr_review_final_{name}", None if name == "title" else value)
+    _, env = _engine_tool_env(graph, context, tmp_path, monkeypatch)
+    assert "PR_REVIEW_FINAL_TITLE" not in env and len(env) == len(FINAL_NAMES) - 1
+    work = tmp_path / "work"
+    write_manifest(work)
+    with pytest.raises(ReviewError, match="exactly the fields"):
+        prr.finalize(env, work_dir=str(work), output_dir=str(tmp_path / "data"))
+
+
+def test_engine_nul_in_a_final_field_fails_the_tool_node(graph, monkeypatch, tmp_path):
+    from amplifier_module_loop_pipeline.context import PipelineContext
+
+    context = PipelineContext()
+    for name, value in final_answer(M_NONCE, M_HEAD, summary="bad\x00value").items():
+        context.set(f"pr_review_final_{name}", value)
+    tool_outcome, env = _engine_tool_env(graph, context, tmp_path, monkeypatch)
+    assert tool_outcome.status.value != "success" and env is None

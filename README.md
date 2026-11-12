@@ -336,6 +336,13 @@ and hands the session's tools to the model nodes, so it does not give the tool-f
 - **Report publication:** `review-result.json` is written last, by one atomic rename, after every other fallible step
   succeeds; any failure removes it. A hard kill cannot be made atomic across a file and a process exit, so a host
   must accept the report only when the pipeline run itself succeeded.
+- **Final answer transport:** the review node returns one outer JSON object with nine individual string context
+  updates (`pr_review_final_version`, `_nonce`, `_evaluated_head_sha`, `_context`, `_context_gaps`, `_verdict`, `_title`,
+  `_summary`, `_review`), so the markdown is escaped once and never nested inside a second JSON string. The outer status
+  is `success` for both verdicts. The host exports each value as a string (`str(value)`) and does not reject duplicate
+  or unknown outer keys; those are host transport behavior and carry no authority. The finalize step reads only the
+  nine fields, then strictly checks the nonce, head, `SUFFICIENT` context with no gaps, verdict, structure and citations
+  against its own trusted manifest. An all-blank answer is refused as a missing structured answer.
 - **Review markdown:** exactly the six headings once each in order; headings are recognised outside standard fenced
   code blocks (an unclosed fence refuses the review) and any decorated `VERDICT` line written by the model is refused,
   because the pipeline adds the single trusted `VERDICT:` line.

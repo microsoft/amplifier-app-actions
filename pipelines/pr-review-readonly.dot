@@ -39,13 +39,19 @@
 //     head and merge base trees by exact object id (the model supplies no
 //     commands or refs), reject anything missing, unsafe, binary, non-UTF-8,
 //     oversize or over budget, and print the next evidence under a fresh nonce.
-//   * review is the final model node. It answers with strict JSON that echoes
-//     the latest nonce and states whether the context was SUFFICIENT or
-//     INCOMPLETE. finalize_report accepts only SUFFICIENT with no gaps,
-//     validates the review (exact headings, verdict, citations of delivered
-//     files) and writes /project/.resolve/data/review-result.json.
-//   * Every tool node blanks the next response key, so a stale or inherited
-//     answer can never be consumed. Any infrastructure problem, rejected
+//   * review is the final model node. It answers with ONE outer JSON object
+//     whose nine context updates are individual string values (version, nonce,
+//     evaluated_head_sha, context, context_gaps, verdict, title, summary,
+//     review); the markdown is escaped once, never as nested JSON. The host
+//     exports each value as str(value) and may ignore duplicate or extra outer
+//     keys: that is host transport behavior, not a strict check made by this
+//     pipeline. finalize_report validates the nine strings strictly (exact
+//     nonce, exact head, SUFFICIENT with no gaps, exact headings, verdict,
+//     citations of delivered files) and writes
+//     /project/.resolve/data/review-result.json. The outer status stays
+//     success for both verdicts.
+//   * Every tool node blanks the next response keys (expand2 blanks all nine
+//     final fields), so a stale or inherited answer can never be consumed. Any infrastructure problem, rejected
 //     request, oversized evidence or malformed/refusing/INCOMPLETE answer fails
 //     the pipeline and writes no report. PASS -> conclusion success;
 //     CHANGES_REQUESTED -> conclusion failure; both complete the pipeline
@@ -198,10 +204,11 @@ STAGES = (STAGE_SELECT1, STAGE_SELECT2, STAGE_REVIEW, STAGE_FINALIZED)
 EVIDENCE_KEYS = {1: 'pr_review_evidence_1', 2: 'pr_review_evidence_2', 3: 'pr_review_evidence_3'}
 SELECT1_KEY = 'pr_review_select1_response'
 SELECT2_KEY = 'pr_review_select2_response'
-FINAL_KEY = 'pr_review_final_response'
+FINAL_FIELDS = ('version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review')
+FINAL_KEYS = {name: 'pr_review_final_' + name for name in FINAL_FIELDS}
 SELECT1_ENV = SELECT1_KEY.upper()
 SELECT2_ENV = SELECT2_KEY.upper()
-FINAL_ENV = FINAL_KEY.upper()
+FINAL_ENVS = {name: key.upper() for name, key in FINAL_KEYS.items()}
 
 # Input bounds.
 MAX_PARAM_BYTES = 16384
@@ -1068,8 +1075,10 @@ def expand(round_number, environ, *, work_dir=None, output_dir=OUTPUT_DIR):
         'parts': list(manifest['parts']) + [part],
     })
     save_manifest(work_dir, updated)
-    next_key = SELECT2_KEY if round_number == 1 else FINAL_KEY
-    return json.dumps({EVIDENCE_KEYS[round_number + 1]: evidence, next_key: ''})
+    blanked = [SELECT2_KEY] if round_number == 1 else list(FINAL_KEYS.values())
+    result = {EVIDENCE_KEYS[round_number + 1]: evidence}
+    result.update({key: '' for key in blanked})
+    return json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1096,12 +1105,43 @@ def _clean_text(value, name, limit, single_line=False):
     return value
 
 
-def parse_final(text, manifest):
-    '''Strictly validate the final answer and return its fields.'''
-    obj = strict_json(text, 'final review response', max_bytes=MAX_FINAL_BYTES)
-    keys = {'version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review'}
+def final_from_env(environ):
+    '''Read the nine flat final fields the host exported as strings.
+
+    The engine exports each context value as str(value); nothing is parsed,
+    stripped or repaired here. A missing variable is left out (so validation
+    refuses the object), and an all-blank set means no answer was applied.
+    '''
+    values = {}
+    total = 0
+    for name in FINAL_FIELDS:
+        value = environ.get(FINAL_ENVS[name])
+        if value is None:
+            continue
+        if type(value) is not str:
+            raise ReviewError('final review field ' + name + ' is not text')
+        try:
+            total += len(value.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise ReviewError('final review field ' + name + ' is not valid UTF-8 text') from None
+        values[name] = value
+    if not any(values.values()):
+        raise ReviewError('final review response is missing: no structured answer was applied to final fields')
+    if total > MAX_FINAL_BYTES:
+        raise ReviewError('final review response exceeds ' + str(MAX_FINAL_BYTES) + ' bytes')
+    obj = dict(values)
+    if obj.get('version') == '1':
+        obj['version'] = 1
+    if 'context_gaps' in obj:
+        obj['context_gaps'] = [obj['context_gaps']] if obj['context_gaps'] else []
+    return obj
+
+
+def validate_final(obj, manifest):
+    '''Strictly validate the final answer fields and return the report fields.'''
+    keys = set(FINAL_FIELDS)
     if type(obj) is not dict or set(obj) != keys:
-        raise ReviewError('final review must be a JSON object with exactly ' + ', '.join(sorted(keys)))
+        raise ReviewError('final review must have exactly the fields ' + ', '.join(sorted(keys)))
     if type(obj['version']) is not int or obj['version'] != 1:
         raise ReviewError('final review version must be 1')
     if obj['nonce'] != manifest['nonce']:
@@ -1398,7 +1438,7 @@ def finalize(environ, *, work_dir=None, output_dir=OUTPUT_DIR):
     manifest = load_manifest(work_dir)
     if manifest['stage'] != STAGE_REVIEW:
         raise ReviewError('finalize requires stage ' + STAGE_REVIEW + ', found ' + manifest['stage'])
-    fields = parse_final(environ.get(FINAL_ENV), manifest)
+    fields = validate_final(final_from_env(environ), manifest)
     report = build_report(manifest, fields)
     data = serialize_report(report)
     if parse_report_bytes(data) != report:
@@ -1604,10 +1644,11 @@ STAGES = (STAGE_SELECT1, STAGE_SELECT2, STAGE_REVIEW, STAGE_FINALIZED)
 EVIDENCE_KEYS = {1: 'pr_review_evidence_1', 2: 'pr_review_evidence_2', 3: 'pr_review_evidence_3'}
 SELECT1_KEY = 'pr_review_select1_response'
 SELECT2_KEY = 'pr_review_select2_response'
-FINAL_KEY = 'pr_review_final_response'
+FINAL_FIELDS = ('version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review')
+FINAL_KEYS = {name: 'pr_review_final_' + name for name in FINAL_FIELDS}
 SELECT1_ENV = SELECT1_KEY.upper()
 SELECT2_ENV = SELECT2_KEY.upper()
-FINAL_ENV = FINAL_KEY.upper()
+FINAL_ENVS = {name: key.upper() for name, key in FINAL_KEYS.items()}
 
 # Input bounds.
 MAX_PARAM_BYTES = 16384
@@ -2474,8 +2515,10 @@ def expand(round_number, environ, *, work_dir=None, output_dir=OUTPUT_DIR):
         'parts': list(manifest['parts']) + [part],
     })
     save_manifest(work_dir, updated)
-    next_key = SELECT2_KEY if round_number == 1 else FINAL_KEY
-    return json.dumps({EVIDENCE_KEYS[round_number + 1]: evidence, next_key: ''})
+    blanked = [SELECT2_KEY] if round_number == 1 else list(FINAL_KEYS.values())
+    result = {EVIDENCE_KEYS[round_number + 1]: evidence}
+    result.update({key: '' for key in blanked})
+    return json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -2502,12 +2545,43 @@ def _clean_text(value, name, limit, single_line=False):
     return value
 
 
-def parse_final(text, manifest):
-    '''Strictly validate the final answer and return its fields.'''
-    obj = strict_json(text, 'final review response', max_bytes=MAX_FINAL_BYTES)
-    keys = {'version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review'}
+def final_from_env(environ):
+    '''Read the nine flat final fields the host exported as strings.
+
+    The engine exports each context value as str(value); nothing is parsed,
+    stripped or repaired here. A missing variable is left out (so validation
+    refuses the object), and an all-blank set means no answer was applied.
+    '''
+    values = {}
+    total = 0
+    for name in FINAL_FIELDS:
+        value = environ.get(FINAL_ENVS[name])
+        if value is None:
+            continue
+        if type(value) is not str:
+            raise ReviewError('final review field ' + name + ' is not text')
+        try:
+            total += len(value.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise ReviewError('final review field ' + name + ' is not valid UTF-8 text') from None
+        values[name] = value
+    if not any(values.values()):
+        raise ReviewError('final review response is missing: no structured answer was applied to final fields')
+    if total > MAX_FINAL_BYTES:
+        raise ReviewError('final review response exceeds ' + str(MAX_FINAL_BYTES) + ' bytes')
+    obj = dict(values)
+    if obj.get('version') == '1':
+        obj['version'] = 1
+    if 'context_gaps' in obj:
+        obj['context_gaps'] = [obj['context_gaps']] if obj['context_gaps'] else []
+    return obj
+
+
+def validate_final(obj, manifest):
+    '''Strictly validate the final answer fields and return the report fields.'''
+    keys = set(FINAL_FIELDS)
     if type(obj) is not dict or set(obj) != keys:
-        raise ReviewError('final review must be a JSON object with exactly ' + ', '.join(sorted(keys)))
+        raise ReviewError('final review must have exactly the fields ' + ', '.join(sorted(keys)))
     if type(obj['version']) is not int or obj['version'] != 1:
         raise ReviewError('final review version must be 1')
     if obj['nonce'] != manifest['nonce']:
@@ -2804,7 +2878,7 @@ def finalize(environ, *, work_dir=None, output_dir=OUTPUT_DIR):
     manifest = load_manifest(work_dir)
     if manifest['stage'] != STAGE_REVIEW:
         raise ReviewError('finalize requires stage ' + STAGE_REVIEW + ', found ' + manifest['stage'])
-    fields = parse_final(environ.get(FINAL_ENV), manifest)
+    fields = validate_final(final_from_env(environ), manifest)
     report = build_report(manifest, fields)
     data = serialize_report(report)
     if parse_report_bytes(data) != report:
@@ -3010,10 +3084,11 @@ STAGES = (STAGE_SELECT1, STAGE_SELECT2, STAGE_REVIEW, STAGE_FINALIZED)
 EVIDENCE_KEYS = {1: 'pr_review_evidence_1', 2: 'pr_review_evidence_2', 3: 'pr_review_evidence_3'}
 SELECT1_KEY = 'pr_review_select1_response'
 SELECT2_KEY = 'pr_review_select2_response'
-FINAL_KEY = 'pr_review_final_response'
+FINAL_FIELDS = ('version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review')
+FINAL_KEYS = {name: 'pr_review_final_' + name for name in FINAL_FIELDS}
 SELECT1_ENV = SELECT1_KEY.upper()
 SELECT2_ENV = SELECT2_KEY.upper()
-FINAL_ENV = FINAL_KEY.upper()
+FINAL_ENVS = {name: key.upper() for name, key in FINAL_KEYS.items()}
 
 # Input bounds.
 MAX_PARAM_BYTES = 16384
@@ -3880,8 +3955,10 @@ def expand(round_number, environ, *, work_dir=None, output_dir=OUTPUT_DIR):
         'parts': list(manifest['parts']) + [part],
     })
     save_manifest(work_dir, updated)
-    next_key = SELECT2_KEY if round_number == 1 else FINAL_KEY
-    return json.dumps({EVIDENCE_KEYS[round_number + 1]: evidence, next_key: ''})
+    blanked = [SELECT2_KEY] if round_number == 1 else list(FINAL_KEYS.values())
+    result = {EVIDENCE_KEYS[round_number + 1]: evidence}
+    result.update({key: '' for key in blanked})
+    return json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -3908,12 +3985,43 @@ def _clean_text(value, name, limit, single_line=False):
     return value
 
 
-def parse_final(text, manifest):
-    '''Strictly validate the final answer and return its fields.'''
-    obj = strict_json(text, 'final review response', max_bytes=MAX_FINAL_BYTES)
-    keys = {'version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review'}
+def final_from_env(environ):
+    '''Read the nine flat final fields the host exported as strings.
+
+    The engine exports each context value as str(value); nothing is parsed,
+    stripped or repaired here. A missing variable is left out (so validation
+    refuses the object), and an all-blank set means no answer was applied.
+    '''
+    values = {}
+    total = 0
+    for name in FINAL_FIELDS:
+        value = environ.get(FINAL_ENVS[name])
+        if value is None:
+            continue
+        if type(value) is not str:
+            raise ReviewError('final review field ' + name + ' is not text')
+        try:
+            total += len(value.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise ReviewError('final review field ' + name + ' is not valid UTF-8 text') from None
+        values[name] = value
+    if not any(values.values()):
+        raise ReviewError('final review response is missing: no structured answer was applied to final fields')
+    if total > MAX_FINAL_BYTES:
+        raise ReviewError('final review response exceeds ' + str(MAX_FINAL_BYTES) + ' bytes')
+    obj = dict(values)
+    if obj.get('version') == '1':
+        obj['version'] = 1
+    if 'context_gaps' in obj:
+        obj['context_gaps'] = [obj['context_gaps']] if obj['context_gaps'] else []
+    return obj
+
+
+def validate_final(obj, manifest):
+    '''Strictly validate the final answer fields and return the report fields.'''
+    keys = set(FINAL_FIELDS)
     if type(obj) is not dict or set(obj) != keys:
-        raise ReviewError('final review must be a JSON object with exactly ' + ', '.join(sorted(keys)))
+        raise ReviewError('final review must have exactly the fields ' + ', '.join(sorted(keys)))
     if type(obj['version']) is not int or obj['version'] != 1:
         raise ReviewError('final review version must be 1')
     if obj['nonce'] != manifest['nonce']:
@@ -4210,7 +4318,7 @@ def finalize(environ, *, work_dir=None, output_dir=OUTPUT_DIR):
     manifest = load_manifest(work_dir)
     if manifest['stage'] != STAGE_REVIEW:
         raise ReviewError('finalize requires stage ' + STAGE_REVIEW + ', found ' + manifest['stage'])
-    fields = parse_final(environ.get(FINAL_ENV), manifest)
+    fields = validate_final(final_from_env(environ), manifest)
     report = build_report(manifest, fields)
     data = serialize_report(report)
     if parse_report_bytes(data) != report:
@@ -4317,18 +4425,19 @@ Verdict: PASS when there are no required changes. CHANGES_REQUESTED when there i
 
 The nonce is the 32-character value printed after BEGIN UNTRUSTED PULL REQUEST DATA on the first line of this data block. It differs from the nonces of earlier rounds; copy this one exactly. evaluated_head_sha is the 40-character head commit printed in the data header.
 
-Respond with ONLY this outer JSON object: no prose before or after it and no code fences. Its single context update value is the inner JSON document, serialized as a JSON string (every double quote inside it escaped with a backslash and every line break written as a JSON escape sequence).
-{\"status\": \"success\", \"context_updates\": {\"pr_review_final_response\": \"INNER JSON DOCUMENT AS A STRING\"}}
-The inner document has exactly these keys and no others:
-version: the number 1
-nonce: the nonce
-evaluated_head_sha: the head commit
-context: SUFFICIENT or INCOMPLETE
-context_gaps: a list of strings, empty when context is SUFFICIENT
-verdict: PASS or CHANGES_REQUESTED
-title: one line, at most 150 characters
-summary: conclusion first, two or three plain-English sentences anyone can understand, then the key evidence; at most 1200 characters
-review: markdown, at most 4500 characters
+Respond with ONLY this one JSON object: no prose before or after it and no code fences. Its status is always success, even when your verdict is CHANGES_REQUESTED. Its context_updates holds exactly nine keys, and every value is a JSON string. There is no inner JSON document: escape the text once, as an ordinary JSON string value (a double quote inside a value is written with a backslash before it, and every line break inside a value is written as the JSON newline escape, a backslash followed by the letter n, never as a raw line break).
+{\"status\": \"success\", \"context_updates\": {\"pr_review_final_version\": \"1\", \"pr_review_final_nonce\": \"THE NONCE\", \"pr_review_final_evaluated_head_sha\": \"THE HEAD COMMIT\", \"pr_review_final_context\": \"SUFFICIENT\", \"pr_review_final_context_gaps\": \"\", \"pr_review_final_verdict\": \"PASS\", \"pr_review_final_title\": \"ONE LINE\", \"pr_review_final_summary\": \"SUMMARY TEXT\", \"pr_review_final_review\": \"REVIEW MARKDOWN\"}}
+The nine values are:
+pr_review_final_version: the string 1
+pr_review_final_nonce: the nonce
+pr_review_final_evaluated_head_sha: the head commit
+pr_review_final_context: SUFFICIENT or INCOMPLETE
+pr_review_final_context_gaps: an empty string when context is SUFFICIENT; otherwise one text that lists each missing file or fact separated by semicolons
+pr_review_final_verdict: PASS or CHANGES_REQUESTED
+pr_review_final_title: one line, at most 150 characters
+pr_review_final_summary: conclusion first, two or three plain-English sentences anyone can understand, then the key evidence; at most 1200 characters
+pr_review_final_review: markdown, at most 4500 characters
+Write all nine as strings, including the version. Do not add other keys.
 
 The review markdown must contain exactly these six headings, each on its own line, once each, in this order, and no other markdown heading:
 ### Necessity
@@ -4349,7 +4458,7 @@ $pr_review_evidence_3"
         shape        = parallelogram,
         fillcolor    = "#FFF9C4",
         timeout      = "5m",
-        tool_env     = "pr_review_final_response",
+        tool_env     = "pr_review_final_version,pr_review_final_nonce,pr_review_final_evaluated_head_sha,pr_review_final_context,pr_review_final_context_gaps,pr_review_final_verdict,pr_review_final_title,pr_review_final_summary,pr_review_final_review",
         tool_command = "python3 -I - finalize <<'PYEOF'
 '''Trusted helpers for pipelines/pr-review-readonly.dot.
 
@@ -4449,10 +4558,11 @@ STAGES = (STAGE_SELECT1, STAGE_SELECT2, STAGE_REVIEW, STAGE_FINALIZED)
 EVIDENCE_KEYS = {1: 'pr_review_evidence_1', 2: 'pr_review_evidence_2', 3: 'pr_review_evidence_3'}
 SELECT1_KEY = 'pr_review_select1_response'
 SELECT2_KEY = 'pr_review_select2_response'
-FINAL_KEY = 'pr_review_final_response'
+FINAL_FIELDS = ('version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review')
+FINAL_KEYS = {name: 'pr_review_final_' + name for name in FINAL_FIELDS}
 SELECT1_ENV = SELECT1_KEY.upper()
 SELECT2_ENV = SELECT2_KEY.upper()
-FINAL_ENV = FINAL_KEY.upper()
+FINAL_ENVS = {name: key.upper() for name, key in FINAL_KEYS.items()}
 
 # Input bounds.
 MAX_PARAM_BYTES = 16384
@@ -5319,8 +5429,10 @@ def expand(round_number, environ, *, work_dir=None, output_dir=OUTPUT_DIR):
         'parts': list(manifest['parts']) + [part],
     })
     save_manifest(work_dir, updated)
-    next_key = SELECT2_KEY if round_number == 1 else FINAL_KEY
-    return json.dumps({EVIDENCE_KEYS[round_number + 1]: evidence, next_key: ''})
+    blanked = [SELECT2_KEY] if round_number == 1 else list(FINAL_KEYS.values())
+    result = {EVIDENCE_KEYS[round_number + 1]: evidence}
+    result.update({key: '' for key in blanked})
+    return json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -5347,12 +5459,43 @@ def _clean_text(value, name, limit, single_line=False):
     return value
 
 
-def parse_final(text, manifest):
-    '''Strictly validate the final answer and return its fields.'''
-    obj = strict_json(text, 'final review response', max_bytes=MAX_FINAL_BYTES)
-    keys = {'version', 'nonce', 'evaluated_head_sha', 'context', 'context_gaps', 'verdict', 'title', 'summary', 'review'}
+def final_from_env(environ):
+    '''Read the nine flat final fields the host exported as strings.
+
+    The engine exports each context value as str(value); nothing is parsed,
+    stripped or repaired here. A missing variable is left out (so validation
+    refuses the object), and an all-blank set means no answer was applied.
+    '''
+    values = {}
+    total = 0
+    for name in FINAL_FIELDS:
+        value = environ.get(FINAL_ENVS[name])
+        if value is None:
+            continue
+        if type(value) is not str:
+            raise ReviewError('final review field ' + name + ' is not text')
+        try:
+            total += len(value.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise ReviewError('final review field ' + name + ' is not valid UTF-8 text') from None
+        values[name] = value
+    if not any(values.values()):
+        raise ReviewError('final review response is missing: no structured answer was applied to final fields')
+    if total > MAX_FINAL_BYTES:
+        raise ReviewError('final review response exceeds ' + str(MAX_FINAL_BYTES) + ' bytes')
+    obj = dict(values)
+    if obj.get('version') == '1':
+        obj['version'] = 1
+    if 'context_gaps' in obj:
+        obj['context_gaps'] = [obj['context_gaps']] if obj['context_gaps'] else []
+    return obj
+
+
+def validate_final(obj, manifest):
+    '''Strictly validate the final answer fields and return the report fields.'''
+    keys = set(FINAL_FIELDS)
     if type(obj) is not dict or set(obj) != keys:
-        raise ReviewError('final review must be a JSON object with exactly ' + ', '.join(sorted(keys)))
+        raise ReviewError('final review must have exactly the fields ' + ', '.join(sorted(keys)))
     if type(obj['version']) is not int or obj['version'] != 1:
         raise ReviewError('final review version must be 1')
     if obj['nonce'] != manifest['nonce']:
@@ -5649,7 +5792,7 @@ def finalize(environ, *, work_dir=None, output_dir=OUTPUT_DIR):
     manifest = load_manifest(work_dir)
     if manifest['stage'] != STAGE_REVIEW:
         raise ReviewError('finalize requires stage ' + STAGE_REVIEW + ', found ' + manifest['stage'])
-    fields = parse_final(environ.get(FINAL_ENV), manifest)
+    fields = validate_final(final_from_env(environ), manifest)
     report = build_report(manifest, fields)
     data = serialize_report(report)
     if parse_report_bytes(data) != report:
