@@ -267,6 +267,7 @@ This repo ships ready-to-use attractor pipelines in the [`pipelines/`](pipelines
 | Pipeline | What it does |
 |----------|-------------|
 | [`pipelines/pr-review-exhaustive.dot`](pipelines/pr-review-exhaustive.dot) | **Exhaustive PR review.** 5 thread-isolated reviewer lanes (correctness · architecture · patterns · tests · pedantic), each with a fresh LLM context so lanes cannot anchor on each other's conclusions. Findings are merged, deduplicated, and prioritized by an adversarial quality gate before posting one comprehensive PR review comment with inline annotations on the Files Changed tab. |
+| [`pipelines/pr-review-readonly.dot`](pipelines/pr-review-readonly.dot) | **Read-only PR review (portable workload for an external DOT host, not a GitHub Action input).** See [Read-only PR review](#read-only-pr-review-portable-workload) below. |
 
 **Exhaustive PR review — zero-copy quickstart** (`actions/checkout` required for the diff):
 
@@ -297,6 +298,60 @@ node [prompt="@.github/amplifier/review-context.md"]
 ```
 
 This is the recommended way to inject project-specific architecture rules, layer boundaries, or naming conventions into a shared pipeline — ship the `.dot` file here and let each consumer repo provide its own context file.
+
+#### Read-only PR review (portable workload)
+
+[`pipelines/pr-review-readonly.dot`](pipelines/pr-review-readonly.dot) is a self-contained DOT workload for an
+**external compatible host** that can run a DOT pipeline engine. It is
+**not** meant for this action's `attractor_source:` input: that path mounts the engine as a session orchestrator
+and hands the session's tools to the model nodes, so it does not give the tool-free guarantee this workload needs.
+
+- **Inputs:** exactly three string parameters supplied by a trusted caller, never by the pull request:
+  `pr_context` (JSON: `repository`, `pr_number`, `pr_url`, `action`, `head_sha`, `base_sha`, `base_ref`),
+  `review_head_sha` (the expected 40-character head commit) and `repository_allowlist` (JSON list of
+  `owner/name` repositories it may read).
+- **Output:** one strict `/project/.resolve/data/review-result.json` (version 1: `version`, `repository`, `pr_number`, `head_sha`,
+  `conclusion` of `success` or `failure`, `title`, `summary`, `text`). PASS maps to `success`, CHANGES_REQUESTED to
+  `failure`. Any problem (including a reviewer that reports its context as incomplete) fails the run and writes no
+  report.
+- **Fixed flow, two context rounds:** collect evidence, model selects up to 12 files, tool retrieves them, model
+  selects up to 12 more, tool retrieves them, model reviews, tool validates and writes the report. No retries, no
+  loops, every forward edge except the initial start edge requires success. The first evidence is the diff, the complete merge base and head
+  version of every changed file, and a complete inventory of every file at both commits; the model chooses what to
+  read next from that inventory (callers, tests, canonical examples, configuration). The review states what it could
+  not see; it does not claim a complete closure of relevant files.
+- **Limits:** evidence is capped at 448 KiB without truncation (a larger review is refused), each file at 256 KiB,
+  at most 12 requests per round, and the file inventory of both trees at 192 KiB (a larger repository is refused).
+  Binary, non-UTF-8, symlink, submodule, missing, oversize or unsafe-path (backslash, absolute, or an empty, `.` or
+  `..` component) requests are refused. A changed symlink is delivered as its target text and a request for it, like
+  any file already delivered, is a no-op; any other symlink request is refused. A changed submodule pointer (gitlink)
+  refuses the whole review, because its content cannot be reviewed. Files the model selects are a relevance judgement
+  made from a bounded inventory, not proof that every relevant file was read. Collection refuses the entire review
+  if any changed version is binary, non-UTF-8, over 256 KiB or an unsupported mode; if there are more than 200
+  changed files or a diff over 384 KiB; or if either tree has an unsafe/non-UTF-8 path or more than 20,000 entries.
+  For example, a PR changing a PNG is refused rather than reviewed from an incomplete diff.
+- **Worker isolation:** run only one review at a time per worker filesystem. Collection resets the fixed private
+  `/tmp/amplifier-pr-review-readonly` directory, and each stage removes any stale report at the fixed output path.
+  The host must check the report's `repository`, `pr_number` and `head_sha` against the exact invocation it started.
+- **Report publication:** `review-result.json` is written last, by one atomic rename, after every other fallible step
+  succeeds; any failure removes it. A hard kill cannot be made atomic across a file and a process exit, so a host
+  must accept the report only when the pipeline run itself succeeded.
+- **Review markdown:** exactly the six headings once each in order; headings are recognised outside standard fenced
+  code blocks (an unclosed fence refuses the review) and any decorated `VERDICT` line written by the model is refused,
+  because the pipeline adds the single trusted `VERDICT:` line.
+- **No remote code execution:** objects are read from a bare repository with `git cat-file`, `ls-tree` and `diff`
+  under an isolated git configuration. Nothing from the pull request is checked out, built, installed, imported or
+  executed, and the model supplies paths only, never commands or refs.
+- **Host requirement:** the model nodes use the `llm-direct` worker, which receives whatever tools the host's engine
+  driver passes. The host must pass none (the pipeline runner's `drive_engine` does). Hosts that mount the engine as
+  a session orchestrator do not provide this guarantee.
+- **Scope:** this is only the review workload. It has no publisher, scheduler, GitHub App or control plane; the
+  host decides when to run it and what to do with the report.
+
+The embedded tool scripts are generated from [`pipelines/src/pr_review_readonly.py`](pipelines/src/pr_review_readonly.py)
+and [`pipelines/src/pr-review-readonly.dot.in`](pipelines/src/pr-review-readonly.dot.in); after editing either, run
+`python pipelines/src/render_pr_review_readonly.py` (and `--check` to verify). Tests:
+`python -m pytest tests/test_pr_review_readonly.py`.
 
 ## Local vs remote sourcing
 
